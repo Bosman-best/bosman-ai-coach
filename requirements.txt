@@ -1,0 +1,19 @@
+# Phase 1 - core reasoning loop
+requests>=2.31
+pydantic>=2.6
+pyyaml>=6.0
+
+# Phase 2 - GUI
+PySide6>=6.6
+
+# Phase 4 - FIFA screen capture + OCR
+mss>=9.0
+pytesseract>=0.3.10
+numpy>=1.26
+
+# Phase 5 - voice (optional; the app runs fine without these, see
+# voice/README.md - the GUI just disables the speak/dictate buttons and
+# tells you why if they're missing)
+pyttsx3>=2.90
+vosk>=0.3.45
+sounddevice>=0.4.6

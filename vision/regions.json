@@ -1,0 +1,19 @@
+{
+  "_comment": "Pixel coordinates of HUD elements on YOUR screen, at YOUR game resolution and HUD scale. Use vision/calibrate.py to find these values, then fill them in here. Leave a region null until it's calibrated - the code treats null as 'not yet set up' and skips it rather than reading the wrong part of the screen. team_stamina_bars is a LIST since a squad has up to 11 players - add one entry per stamina bar you can see (e.g. on the team management / player instructions screen), and the average is used for team_stamina_avg_pct.",
+  "regions": {
+    "my_score": null,
+    "opponent_score": null,
+    "clock": null,
+    "striker_stamina_bar": null,
+    "key_player_stamina_bar": null,
+    "shots": null,
+    "opponent_shots": null,
+    "shots_on_target": null,
+    "opponent_shots_on_target": null,
+    "corners": null,
+    "opponent_corners": null,
+    "my_yellow_cards": null,
+    "opponent_yellow_cards": null
+  },
+  "team_stamina_bars": []
+}

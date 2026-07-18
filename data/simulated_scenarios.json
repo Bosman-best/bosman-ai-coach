@@ -1,0 +1,154 @@
+{
+  "scenarios": [
+    {
+      "name": "Losing late, opponent attacking down the left",
+      "state": {
+        "minute": 70,
+        "my_score": 1,
+        "opponent_score": 2,
+        "formation": "4-3-3",
+        "playing_style": "balanced",
+        "possession_pct": 40,
+        "opponent_threat_side": "left_wing",
+        "striker_stamina_pct": 35,
+        "key_player_stamina_pct": null,
+        "red_card": false,
+        "notes": null
+      }
+    },
+    {
+      "name": "Narrow lead, need to see out the game",
+      "state": {
+        "minute": 82,
+        "my_score": 1,
+        "opponent_score": 0,
+        "formation": "4-2-3-1",
+        "playing_style": "possession",
+        "possession_pct": 55,
+        "opponent_threat_side": "through_middle",
+        "striker_stamina_pct": 60,
+        "key_player_stamina_pct": 40,
+        "red_card": false,
+        "notes": "Opponent has just brought on two attackers"
+      }
+    },
+    {
+      "name": "Down to 10 men, drawing at half time",
+      "state": {
+        "minute": 45,
+        "my_score": 1,
+        "opponent_score": 1,
+        "formation": "4-3-3",
+        "playing_style": "balanced",
+        "possession_pct": 38,
+        "opponent_threat_side": "right_wing",
+        "striker_stamina_pct": 80,
+        "key_player_stamina_pct": 75,
+        "red_card": true,
+        "notes": "Sent off in the 40th minute for a professional foul"
+      }
+    },
+    {
+      "name": "Dominant possession but no goals",
+      "state": {
+        "minute": 60,
+        "my_score": 0,
+        "opponent_score": 0,
+        "formation": "4-3-3",
+        "playing_style": "possession",
+        "possession_pct": 68,
+        "opponent_threat_side": null,
+        "striker_stamina_pct": 70,
+        "key_player_stamina_pct": 65,
+        "red_card": false,
+        "opponent_red_card": false,
+        "notes": "Opponent parking the bus with 5 at the back"
+      }
+    },
+    {
+      "name": "Early goal conceded, plenty of time left",
+      "state": {
+        "minute": 18,
+        "my_score": 0,
+        "opponent_score": 1,
+        "formation": "4-3-3",
+        "playing_style": "balanced",
+        "possession_pct": 52,
+        "opponent_threat_side": null,
+        "striker_stamina_pct": null,
+        "key_player_stamina_pct": null,
+        "red_card": false,
+        "opponent_red_card": false,
+        "notes": "Conceded from a set piece, otherwise playing fine"
+      }
+    },
+    {
+      "name": "Two goals down with 15 minutes left",
+      "state": {
+        "minute": 75,
+        "my_score": 0,
+        "opponent_score": 2,
+        "formation": "4-3-3",
+        "playing_style": "balanced",
+        "possession_pct": 45,
+        "opponent_threat_side": "right_wing",
+        "striker_stamina_pct": 50,
+        "key_player_stamina_pct": 55,
+        "red_card": false,
+        "opponent_red_card": false,
+        "notes": null
+      }
+    },
+    {
+      "name": "Commanding 3-0 lead, 20 minutes left",
+      "state": {
+        "minute": 70,
+        "my_score": 3,
+        "opponent_score": 0,
+        "formation": "4-3-3",
+        "playing_style": "possession",
+        "possession_pct": 58,
+        "opponent_threat_side": null,
+        "striker_stamina_pct": 45,
+        "key_player_stamina_pct": 50,
+        "red_card": false,
+        "opponent_red_card": false,
+        "notes": "Game is comfortably under control"
+      }
+    },
+    {
+      "name": "Opponent down to 10 men, we're drawing",
+      "state": {
+        "minute": 55,
+        "my_score": 1,
+        "opponent_score": 1,
+        "formation": "4-3-3",
+        "playing_style": "balanced",
+        "possession_pct": 50,
+        "opponent_threat_side": null,
+        "striker_stamina_pct": 70,
+        "key_player_stamina_pct": 65,
+        "red_card": false,
+        "opponent_red_card": true,
+        "notes": "Their center-back was sent off in the 50th minute"
+      }
+    },
+    {
+      "name": "Extra time, still level, need a winner",
+      "state": {
+        "minute": 105,
+        "my_score": 1,
+        "opponent_score": 1,
+        "formation": "4-3-3",
+        "playing_style": "balanced",
+        "possession_pct": 50,
+        "opponent_threat_side": "left_wing",
+        "striker_stamina_pct": 30,
+        "key_player_stamina_pct": 25,
+        "red_card": false,
+        "opponent_red_card": false,
+        "notes": "Both teams visibly tired, penalties loom if no goal"
+      }
+    }
+  ]
+}

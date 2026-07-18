@@ -1,0 +1,16 @@
+# Bosman AI Coach configuration
+
+ollama_host: "http://localhost:11434"
+
+# qwen2.5:3b is recommended for the live coaching model: fast enough on
+# CPU-only hardware for a real-time-ish "ask coach" interaction.
+# qwen2.5-coder:7b is heavier and better suited to development work in
+# VS Code, not to in-match advice generation.
+model: "qwen2.5:3b"
+
+request_timeout_s: 120
+
+# Phase 5 (voice, optional) - path to a downloaded vosk model directory
+# for dictating the notes field. Leave commented out to use the default
+# (voice/model). TTS (reading advice aloud) needs no model path at all.
+# voice_stt_model_path: "voice/model"
