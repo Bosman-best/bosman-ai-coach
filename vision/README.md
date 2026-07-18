@@ -92,10 +92,17 @@ local Tesseract installation before it is considered fixed.**
 
 This requirement follows the leading-`1` stats regression: a change from PSM
 7 to PSM 8 was initially made without a native Tesseract run, then real
-Tesseract 5.5 testing showed that the LSTM `tessedit_char_whitelist` call
-could suppress output entirely. The module now upscales OCR crops and
-post-filters unconstrained OCR output, but that behavior still needs a real
-local Tesseract test after every OCR-related edit.
+Tesseract 5.5 testing showed that a manually supplied LSTM
+`-c tessedit_char_whitelist=...` call could suppress output entirely. The
+module now upscales OCR crops and uses Tesseract's packaged `digits` config
+for standalone numeric OCR, but that behavior still needs a real local
+Tesseract test after every OCR-related edit.
+
+**`tessedit_char_whitelist` should not be used for digit OCR in this project;
+use Tesseract's built-in `digits` config instead.** The manual whitelist has
+produced empty output on the target LSTM installation, while the native
+`digits` config was proven by the Tesseract CLI to recognize the same `17`
+crop correctly.
 
 For diagnosis, set `BOSMAN_OCR_DEBUG_PATH` to a PNG path; `ocr.py` writes the
 exact prepared (upscaled) image supplied to Tesseract there.

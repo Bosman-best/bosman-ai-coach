@@ -78,15 +78,17 @@ def _write_ocr_debug_image(image: Image.Image) -> None:
 def read_single_number(image: Image.Image) -> Optional[int]:
     """Read a lone number from a calibrated crop.
 
-    PSM 8 models the crop as a single numeric word. Do not use
-    ``tessedit_char_whitelist`` here: with the default LSTM OCR engine it can
-    suppress all output for small HUD crops. Instead, parse digits from the
-    unconstrained OCR result below.
+    Use Tesseract's packaged ``digits`` config—not a hand-built
+    ``tessedit_char_whitelist`` flag. On the target Tesseract 5.5 install,
+    the former correctly recognizes thin leading digits while the latter can
+    suppress all LSTM output. ``config="digits"`` is intentionally the exact
+    CLI invocation already proven on that install (``tesseract image stdout
+    digits``); do not layer unverified PSM/DPI flags onto it here.
     """
     _require_pytesseract()
     ocr_image = _number_image_for_ocr(image)
     _write_ocr_debug_image(ocr_image)
-    raw = pytesseract.image_to_string(ocr_image, config=f"--psm 8 {_OCR_DPI_CONFIG}")
+    raw = pytesseract.image_to_string(ocr_image, config="digits")
     match = re.search(r"\d+", raw)
     return int(match.group()) if match else None
 

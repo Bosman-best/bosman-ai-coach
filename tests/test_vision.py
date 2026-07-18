@@ -56,7 +56,7 @@ def test_score_ocr_reads_real_image():
     print("OK - OCR reads a real synthetic scoreboard image correctly (2-1)")
 
 
-def test_single_number_ocr_upscales_and_post_filters_without_tesseract():
+def test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract():
     """Exercise the non-Tesseract safeguards with a deterministic fake engine."""
     class FakeTesseract:
         def __init__(self):
@@ -77,9 +77,9 @@ def test_single_number_ocr_upscales_and_post_filters_without_tesseract():
 
     assert result == 17
     assert fake.image.size == (240, 180)
+    assert fake.config == "digits"
     assert "tessedit_char_whitelist" not in fake.config
-    assert "--psm 8" in fake.config
-    print("OK - number OCR upscales 4x and filters digits after unconstrained OCR")
+    print("OK - number OCR upscales 4x and uses Tesseract's packaged digits config")
 
 
 def test_single_number_ocr_preserves_leading_one():
@@ -216,7 +216,7 @@ def test_match_reader_reads_stats_and_team_stamina_average():
 
 if __name__ == "__main__":
     test_score_ocr_reads_real_image()
-    test_single_number_ocr_upscales_and_post_filters_without_tesseract()
+    test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract()
     test_single_number_ocr_preserves_leading_one()
     test_clock_ocr_reads_real_image()
     test_match_reader_reads_stats_and_team_stamina_average()
