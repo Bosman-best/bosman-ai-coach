@@ -48,20 +48,15 @@ def print_advice(advice) -> None:
     print("\n" + "=" * 60)
     print("BOSMAN AI COACH — RECOMMENDATION")
     print("=" * 60)
-    print(f"\n{advice.summary}\n")
+    print(f"\nTOP: {advice.top_suggestion}\n")
     if advice.formation_change:
         print(f"  Formation change   -> {advice.formation_change.value}")
     if advice.style_change:
         print(f"  Playing style      -> {advice.style_change.value}")
-    if advice.substitution_suggestions:
-        print("  Substitutions:")
-        for s in advice.substitution_suggestions:
-            print(f"    - {s}")
-    if advice.tactical_instructions:
-        print("  Tactical instructions:")
-        for t in advice.tactical_instructions:
-            print(f"    - {t}")
-    print(f"\n  Why: {advice.reasoning}")
+    if advice.secondary_considerations:
+        print("  Also consider:")
+        for consideration in advice.secondary_considerations:
+            print(f"    - {consideration}")
     print("=" * 60 + "\n")
 
 

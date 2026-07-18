@@ -90,16 +90,15 @@ class MatchState(BaseModel):
 
 
 class AdviceResponse(BaseModel):
-    """Structured advice returned by the reasoning engine. Requesting
-    JSON output in this exact shape (rather than parsing free text) is
-    what makes the GUI layer trivial and deterministic."""
+    """A deliberately compact, ordered live-play recommendation."""
 
-    summary: str = Field(description="One sentence, the headline recommendation")
+    top_suggestion: str = Field(description="The one highest-priority action")
+    secondary_considerations: list[str] = Field(
+        default_factory=list, max_length=2,
+        description="Zero to two brief supporting actions, in priority order",
+    )
     formation_change: Optional[Formation] = None
     style_change: Optional[PlayingStyle] = None
-    substitution_suggestions: list[str] = Field(default_factory=list)
-    tactical_instructions: list[str] = Field(default_factory=list)
-    reasoning: str = Field(description="Short explanation of WHY, 2-3 sentences max")
 
 
 class AppConfig(BaseModel):

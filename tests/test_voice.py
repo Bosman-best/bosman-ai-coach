@@ -44,19 +44,16 @@ class _FakeEnumValue:
 @dataclass
 class _FakeAdviceResponse:
     """Stand-in for core.schemas.AdviceResponse - see module docstring."""
-    summary: str
-    reasoning: str = ""
+    top_suggestion: str
     formation_change: object = None
     style_change: object = None
-    substitution_suggestions: list = field(default_factory=list)
-    tactical_instructions: list = field(default_factory=list)
+    secondary_considerations: list = field(default_factory=list)
 
 
 def test_advice_to_speech_text_headline_only():
     advice = _FakeAdviceResponse(
-        summary="Hold your shape and see the game out.",
-        reasoning="You're a goal up with 5 minutes left.",
-    )
+        top_suggestion="Hold your shape and see the game out.",
+            )
     text = advice_to_speech_text(advice)
     assert text == "Hold your shape and see the game out."
     print("OK - headline-only advice speaks as just the summary")
@@ -64,40 +61,36 @@ def test_advice_to_speech_text_headline_only():
 
 def test_advice_to_speech_text_includes_formation_and_style():
     advice = _FakeAdviceResponse(
-        summary="Shut up shop.",
+        top_suggestion="Shut up shop.",
         formation_change=_FakeEnumValue("5-3-2"),
         style_change=_FakeEnumValue("park_the_bus"),
-        reasoning="Protect the lead.",
-    )
+            )
     text = advice_to_speech_text(advice)
     assert "Switch to 5-3-2." in text
     assert "Play park the bus." in text  # underscore -> space for speakability
     print("OK - formation/style changes are spoken, underscores turned into spaces")
 
 
-def test_advice_to_speech_text_prefers_substitution_over_tactical():
+def test_advice_to_speech_text_uses_first_secondary_consideration():
     advice = _FakeAdviceResponse(
-        summary="Freshen up the front line.",
-        substitution_suggestions=["Bring on a fresh striker for the tired one"],
-        tactical_instructions=["Push fullbacks higher", "Overload the left"],
-        reasoning="Fatigue is showing.",
-    )
+        top_suggestion="Freshen up the front line.",
+        secondary_considerations=["Bring on a fresh striker for the tired one", "Push fullbacks higher"],
+            )
     text = advice_to_speech_text(advice)
     assert "Bring on a fresh striker for the tired one." in text
     assert "Push fullbacks higher" not in text
-    print("OK - one substitution suggestion is spoken; tactical instructions dropped to keep it short")
+    print("OK - only the first secondary consideration is spoken to keep it short")
 
 
-def test_advice_to_speech_text_falls_back_to_tactical_instruction():
+def test_advice_to_speech_text_uses_secondary_consideration():
     advice = _FakeAdviceResponse(
-        summary="Change how you're pressing.",
-        tactical_instructions=["Press higher up the pitch", "Close down the ball carrier faster"],
-        reasoning="You're not winning the ball back quickly enough.",
-    )
+        top_suggestion="Change how you're pressing.",
+        secondary_considerations=["Press higher up the pitch", "Close down the ball carrier faster"],
+            )
     text = advice_to_speech_text(advice)
     assert "Press higher up the pitch." in text
     assert "Close down the ball carrier faster" not in text
-    print("OK - falls back to first tactical instruction when there's no substitution")
+    print("OK - speaks the first secondary consideration")
 
 
 def test_tts_engine_degrades_gracefully_without_pyttsx3():
@@ -150,8 +143,8 @@ def test_stt_engine_start_recording_raises_clear_error_when_unavailable():
 if __name__ == "__main__":
     test_advice_to_speech_text_headline_only()
     test_advice_to_speech_text_includes_formation_and_style()
-    test_advice_to_speech_text_prefers_substitution_over_tactical()
-    test_advice_to_speech_text_falls_back_to_tactical_instruction()
+    test_advice_to_speech_text_uses_first_secondary_consideration()
+    test_advice_to_speech_text_uses_secondary_consideration()
     test_tts_engine_degrades_gracefully_without_pyttsx3()
     test_tts_engine_speak_raises_clear_error_when_unavailable()
     test_stt_engine_degrades_gracefully_without_vosk()

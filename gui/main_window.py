@@ -597,20 +597,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _format_advice_html(advice: AdviceResponse) -> str:
-        parts = [f"<h3>{advice.summary}</h3>"]
+        parts = [f"<h3>Top suggestion: {advice.top_suggestion}</h3>"]
         if advice.formation_change:
             parts.append(f"<b>Formation change:</b> {advice.formation_change.value}<br>")
         if advice.style_change:
             parts.append(f"<b>Playing style:</b> {advice.style_change.value}<br>")
-        if advice.substitution_suggestions:
-            parts.append("<b>Substitutions:</b><ul>")
-            parts += [f"<li>{s}</li>" for s in advice.substitution_suggestions]
+        if advice.secondary_considerations:
+            parts.append("<b>Also consider:</b><ul>")
+            parts += [f"<li>{item}</li>" for item in advice.secondary_considerations]
             parts.append("</ul>")
-        if advice.tactical_instructions:
-            parts.append("<b>Tactical instructions:</b><ul>")
-            parts += [f"<li>{t}</li>" for t in advice.tactical_instructions]
-            parts.append("</ul>")
-        parts.append(f"<br><i>Why: {advice.reasoning}</i>")
         return "".join(parts)
 
 

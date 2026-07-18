@@ -113,6 +113,33 @@ Advice is requested as strict JSON (`format: "json"` in the Ollama request)
 so it can be validated against `AdviceResponse` directly - no fragile
 free-text parsing.
 
+## Live-play reasoning rules
+
+The prompt builder treats the match snapshot as **read-only**: it only turns
+entered `MatchState` values into advice and never controls, modifies, or seeks
+additional input from the game. Its output is deliberately compact: one
+prioritized `top_suggestion`, followed by at most two
+`secondary_considerations`.
+
+It reasons about related signals rather than reacting to each number alone:
+
+- At least 8 shots with 35% or fewer on target is a finishing/shot-selection
+  signal. The coach should favor composure, personnel, or better shot choices,
+  not tactics intended simply to generate more shots.
+- Three or fewer entered shots is a chance-creation signal. The coach should
+  favor buildup, width, movement, or tempo changes.
+- A falling possession trend combined with team-average stamina of 55% or less
+  is an energy/control risk: conserve energy, use a compact shape and fresh
+  legs, rather than pressing higher.
+- Two or more yellow cards creates live card risk, so pressing and hard-tackle
+  recommendations must be tempered in favor of controlled pressure.
+
+These thresholds are only applied when every value needed for that conclusion
+is entered. Every optional missing field is rendered as `unknown` in the
+prompt—not as zero—and the model is told not to make a confident
+stat-dependent recommendation from it. Fixed snapshot regression tests in
+`tests/test_core.py` cover these rules.
+
 ## Adding your own scenarios
 
 Edit `data/simulated_scenarios.json`. Each entry needs a `name` and a
