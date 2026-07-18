@@ -10,7 +10,9 @@ Two different techniques on purpose:
 """
 
 from __future__ import annotations
+import os
 import re
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image
@@ -36,13 +38,44 @@ def _require_pytesseract() -> None:
         )
 
 
+def _number_image_for_ocr(image: Image.Image) -> Image.Image:
+    """Return the exact number crop supplied to Tesseract.
+
+    There is deliberately no contour crop, whitespace trim, or thresholding
+    here. In particular, those operations can discard a thin leading ``1``.
+    Keeping this helper makes that guarantee testable and gives one explicit
+    point for inspecting the bytes passed to OCR.
+    """
+    return image.copy()
+
+
+def _write_ocr_debug_image(image: Image.Image) -> None:
+    """Optionally save the *post-preparation* OCR input for diagnosis.
+
+    Set BOSMAN_OCR_DEBUG_PATH to a PNG path while reproducing an OCR issue.
+    This is intentionally opt-in so normal live play does not write screenshots
+    to disk.
+    """
+    debug_path = os.environ.get("BOSMAN_OCR_DEBUG_PATH")
+    if debug_path:
+        Path(debug_path).parent.mkdir(parents=True, exist_ok=True)
+        image.save(debug_path, format="PNG")
+
+
 def read_single_number(image: Image.Image) -> Optional[int]:
-    """Read a lone number from a cropped image - use this when you've
-    calibrated separate regions for 'my score' and 'opponent score'
-    rather than one combined 'X - Y' crop."""
+    """Read a lone number from a calibrated crop.
+
+    PSM 8 (one word) is used rather than PSM 7 (one text line). Tesseract 5.5
+    can segment a sparse leading ``1`` as margin noise in a short line and
+    return only the following digit; a numeric word is the actual shape of a
+    score/stat crop and retains the leading digit.
+    """
     _require_pytesseract()
+    ocr_image = _number_image_for_ocr(image)
+    _write_ocr_debug_image(ocr_image)
     raw = pytesseract.image_to_string(
-        image, config="--psm 7 -c tessedit_char_whitelist=0123456789"
+        ocr_image,
+        config="--psm 8 -c tessedit_char_whitelist=0123456789",
     )
     match = re.search(r"\d+", raw)
     return int(match.group()) if match else None

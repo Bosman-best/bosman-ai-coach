@@ -55,6 +55,22 @@ def test_score_ocr_reads_real_image():
     print("OK - OCR reads a real synthetic scoreboard image correctly (2-1)")
 
 
+def test_single_number_ocr_preserves_leading_one():
+    """Regression: Tesseract 5.5 PSM 7 dropped the leading thin ``1`` in 14."""
+    from PIL import ImageFont
+
+    image = Image.new("RGB", (60, 45), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((15, 7), "17", fill=(255, 255, 255), font=font)
+
+    assert read_single_number(image) == 17
+    print("OK - OCR preserves a thin leading 1 in 17")
+
+
 def test_clock_ocr_reads_real_image():
     fixture = _make_hud_fixture()
     clock_img = grab_region(ScreenRegion("clock", 460, 30, 80, 50), source_image=fixture)
@@ -173,6 +189,7 @@ def test_match_reader_reads_stats_and_team_stamina_average():
 
 if __name__ == "__main__":
     test_score_ocr_reads_real_image()
+    test_single_number_ocr_preserves_leading_one()
     test_clock_ocr_reads_real_image()
     test_match_reader_reads_stats_and_team_stamina_average()
     test_parse_score_text_variants()
