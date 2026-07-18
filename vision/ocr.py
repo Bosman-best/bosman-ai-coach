@@ -38,15 +38,28 @@ def _require_pytesseract() -> None:
         )
 
 
-def _number_image_for_ocr(image: Image.Image) -> Image.Image:
-    """Return the exact number crop supplied to Tesseract.
+_OCR_SCALE = 4
+# Tell Tesseract the intended working resolution as well as increasing pixels;
+# otherwise it may still estimate a low DPI from a tiny HUD glyph.
+_OCR_DPI_CONFIG = "--dpi 300"
 
-    There is deliberately no contour crop, whitespace trim, or thresholding
-    here. In particular, those operations can discard a thin leading ``1``.
-    Keeping this helper makes that guarantee testable and gives one explicit
-    point for inspecting the bytes passed to OCR.
+
+def _image_for_ocr(image: Image.Image) -> Image.Image:
+    """Prepare a crop for Tesseract without discarding any glyph pixels.
+
+    HUD crops are often only about 60x45 pixels.  Resize every text/number crop
+    with Lanczos interpolation before OCR so Tesseract does not have to infer
+    character features from a low-resolution image.  There is deliberately no
+    contour crop, whitespace trim, or thresholding here: those operations can
+    discard a thin leading ``1``.
     """
-    return image.copy()
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    return image.resize((image.width * _OCR_SCALE, image.height * _OCR_SCALE), resampling)
+
+
+# Kept as a focused alias for callers/tests diagnosing single-number OCR.
+def _number_image_for_ocr(image: Image.Image) -> Image.Image:
+    return _image_for_ocr(image)
 
 
 def _write_ocr_debug_image(image: Image.Image) -> None:
@@ -65,18 +78,15 @@ def _write_ocr_debug_image(image: Image.Image) -> None:
 def read_single_number(image: Image.Image) -> Optional[int]:
     """Read a lone number from a calibrated crop.
 
-    PSM 8 (one word) is used rather than PSM 7 (one text line). Tesseract 5.5
-    can segment a sparse leading ``1`` as margin noise in a short line and
-    return only the following digit; a numeric word is the actual shape of a
-    score/stat crop and retains the leading digit.
+    PSM 8 models the crop as a single numeric word. Do not use
+    ``tessedit_char_whitelist`` here: with the default LSTM OCR engine it can
+    suppress all output for small HUD crops. Instead, parse digits from the
+    unconstrained OCR result below.
     """
     _require_pytesseract()
     ocr_image = _number_image_for_ocr(image)
     _write_ocr_debug_image(ocr_image)
-    raw = pytesseract.image_to_string(
-        ocr_image,
-        config="--psm 8 -c tessedit_char_whitelist=0123456789",
-    )
+    raw = pytesseract.image_to_string(ocr_image, config=f"--psm 8 {_OCR_DPI_CONFIG}")
     match = re.search(r"\d+", raw)
     return int(match.group()) if match else None
 
@@ -85,9 +95,11 @@ def read_score(image: Image.Image) -> Optional[tuple[int, int]]:
     """Read a scoreline like '1 - 2' or '2-1' from a cropped image.
     Returns (my_score, opponent_score) or None if it couldn't be parsed."""
     _require_pytesseract()
-    raw = pytesseract.image_to_string(
-        image, config="--psm 7 -c tessedit_char_whitelist=0123456789-: "
-    )
+    ocr_image = _image_for_ocr(image)
+    _write_ocr_debug_image(ocr_image)
+    # Post-parse the unconstrained result rather than using the LSTM-incompatible
+    # character whitelist; parse_score_text is deliberately tolerant of spacing.
+    raw = pytesseract.image_to_string(ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG}")
     return parse_score_text(raw)
 
 
@@ -103,12 +115,12 @@ def read_minute(image: Image.Image) -> Optional[int]:
     """Read the match clock (e.g. '70:23' or "70'") and return just the
     minute as an int. Returns None if it couldn't be parsed."""
     _require_pytesseract()
-    # Whitelist digits and colon only - an apostrophe in the whitelist
-    # string breaks pytesseract's shlex-based config parsing, and we don't
-    # need it anyway since parse_minute_text only looks at the leading digits.
-    raw = pytesseract.image_to_string(
-        image, config="--psm 7 -c tessedit_char_whitelist=0123456789:"
-    )
+    ocr_image = _image_for_ocr(image)
+    _write_ocr_debug_image(ocr_image)
+    # Do not pass a character whitelist: Tesseract's LSTM engine can return an
+    # empty result for small crops when constrained this way. The parser keeps
+    # only the leading digits after unconstrained recognition.
+    raw = pytesseract.image_to_string(ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG}")
     return parse_minute_text(raw)
 
 

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PIL import Image, ImageDraw
 
+import vision.ocr as ocr_module
 from vision.ocr import parse_score_text, parse_minute_text, stamina_fill_percent, read_single_number, read_minute
 from vision.capture import ScreenRegion, grab_region
 
@@ -53,6 +54,32 @@ def test_score_ocr_reads_real_image():
     assert read_single_number(my_img) == 2
     assert read_single_number(opp_img) == 1
     print("OK - OCR reads a real synthetic scoreboard image correctly (2-1)")
+
+
+def test_single_number_ocr_upscales_and_post_filters_without_tesseract():
+    """Exercise the non-Tesseract safeguards with a deterministic fake engine."""
+    class FakeTesseract:
+        def __init__(self):
+            self.image = None
+            self.config = None
+
+        def image_to_string(self, image, config):
+            self.image, self.config = image, config
+            return "an17!"  # unconstrained LSTM-like noise around valid digits
+
+    fake = FakeTesseract()
+    original = ocr_module.pytesseract
+    ocr_module.pytesseract = fake
+    try:
+        result = read_single_number(Image.new("RGB", (60, 45), (0, 0, 0)))
+    finally:
+        ocr_module.pytesseract = original
+
+    assert result == 17
+    assert fake.image.size == (240, 180)
+    assert "tessedit_char_whitelist" not in fake.config
+    assert "--psm 8" in fake.config
+    print("OK - number OCR upscales 4x and filters digits after unconstrained OCR")
 
 
 def test_single_number_ocr_preserves_leading_one():
@@ -189,6 +216,7 @@ def test_match_reader_reads_stats_and_team_stamina_average():
 
 if __name__ == "__main__":
     test_score_ocr_reads_real_image()
+    test_single_number_ocr_upscales_and_post_filters_without_tesseract()
     test_single_number_ocr_preserves_leading_one()
     test_clock_ocr_reads_real_image()
     test_match_reader_reads_stats_and_team_stamina_average()

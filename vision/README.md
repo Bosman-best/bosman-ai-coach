@@ -81,3 +81,21 @@ region coordinates can't be hardcoded - you have to find them.
 runs the real OCR/color-analysis pipeline against it - the same code path
 used for a live screenshot, just pointed at a generated test image instead.
 Run it with `python tests/test_vision.py`.
+
+## OCR change verification is mandatory
+
+The Arena development sandbox does not include the native `tesseract`
+executable, so it cannot validate real recognition behavior. **Any change to
+an OCR call in `vision/ocr.py`—including PSM, OEM, character constraints, or
+preprocessing—must be verified by running the vision tests against a real
+local Tesseract installation before it is considered fixed.**
+
+This requirement follows the leading-`1` stats regression: a change from PSM
+7 to PSM 8 was initially made without a native Tesseract run, then real
+Tesseract 5.5 testing showed that the LSTM `tessedit_char_whitelist` call
+could suppress output entirely. The module now upscales OCR crops and
+post-filters unconstrained OCR output, but that behavior still needs a real
+local Tesseract test after every OCR-related edit.
+
+For diagnosis, set `BOSMAN_OCR_DEBUG_PATH` to a PNG path; `ocr.py` writes the
+exact prepared (upscaled) image supplied to Tesseract there.
