@@ -12,6 +12,7 @@ project root, once you're not calling this file directly from elsewhere).
 
 from __future__ import annotations
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QSpinBox, QComboBox, QCheckBox, QLineEdit, QPushButton,
     QLabel, QTextEdit, QSlider, QMessageBox, QScrollArea, QSizePolicy, QFrame,
-    QGraphicsDropShadowEffect,
+    QAbstractSpinBox, QGraphicsDropShadowEffect,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -223,32 +224,73 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.scroll_area)
         self._apply_theme()
         self._apply_text_and_control_shadows(content)
+        if os.environ.get("BOSMAN_GUI_EFFECT_DEBUG"):
+            self._log_graphics_effects()
+
+    @staticmethod
+    def _is_spin_box_editor(widget: QWidget) -> bool:
+        """True for the private QLineEdit embedded by any QAbstractSpinBox.
+
+        QSpinBox paints its number through that child line edit. A shadow on
+        the child looks exactly like a doubled numeric value even when the
+        outer QSpinBox itself has no effect.
+        """
+        parent = widget.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QAbstractSpinBox):
+                return True
+            parent = parent.parentWidget()
+        return False
 
     def _apply_text_and_control_shadows(self, content: QWidget) -> None:
         """Give text-bearing widgets a consistent, subtle floating shadow.
 
         Qt stylesheets do not implement CSS ``text-shadow``. Applying a
-        QGraphicsDropShadowEffect to each leaf control shadows its rendered
-        text as well as its outline, so labels, values, buttons and dropdowns
-        remain readable over the moving photo background.
+        QGraphicsDropShadowEffect to each supported leaf control shadows its
+        rendered text as well as its outline. QAbstractSpinBox editors are
+        explicitly excluded because they render numeric glyphs internally.
         """
-        # Do not apply an effect to QSpinBox (or a QGroupBox that contains it).
-        # A group-box effect shadows its complete composited child tree, so it
-        # duplicates the numeric glyphs even when the spin box itself is
-        # excluded. The stat fields are plain QSpinBox instances, not a custom
-        # subclass; removing the parent effect covers every current and future
-        # spin-box-based field via inheritance/composition.
         shadowed_types = (
             QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox, QTextEdit,
         )
         for widget in [content, *content.findChildren(QWidget)]:
             if not isinstance(widget, shadowed_types):
                 continue
+            # Every stats/stamina/score field is a QSpinBox today, but this
+            # ancestry check also protects any future QSpinBox subclass.
+            if isinstance(widget, QLineEdit) and self._is_spin_box_editor(widget):
+                continue
             shadow = QGraphicsDropShadowEffect(widget)
             shadow.setColor(QColor(0, 0, 0, 205))  # rgba(0, 0, 0, 0.80)
             shadow.setOffset(1.5, 2.0)
             shadow.setBlurRadius(4.0)
             widget.setGraphicsEffect(shadow)
+
+    def _log_graphics_effects(self) -> None:
+        """Print all attached graphics effects when BOSMAN_GUI_EFFECT_DEBUG=1.
+
+        This intentionally reports the runtime widget tree, including Qt's
+        private spin-box line editor, rather than inferring effects from the
+        shadow-application source.
+        """
+        print("[Bosman GUI effects] attached graphics effects:")
+        for widget in [self, *self.findChildren(QWidget)]:
+            effect = widget.graphicsEffect()
+            if effect is None:
+                continue
+            class_name = widget.metaObject().className()
+            object_name = widget.objectName() or "(no objectName)"
+            effect_name = effect.metaObject().className()
+            details = ""
+            if isinstance(effect, QGraphicsDropShadowEffect):
+                offset = effect.offset()
+                color = effect.color()
+                details = (
+                    f" blur={effect.blurRadius():.1f}"
+                    f" offset=({offset.x():.1f},{offset.y():.1f})"
+                    f" color=rgba({color.red()},{color.green()},{color.blue()},{color.alpha()})"
+                )
+            print(f"  {class_name} objectName={object_name}: {effect_name}{details}")
 
     def _apply_theme(self) -> None:
         """Use translucent panel grouping while preserving high-contrast controls."""
