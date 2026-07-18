@@ -12,6 +12,7 @@ Two different techniques on purpose:
 from __future__ import annotations
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -75,25 +76,53 @@ def _write_ocr_debug_image(image: Image.Image) -> None:
         image.save(debug_path, format="PNG")
 
 
-def read_single_number(image: Image.Image) -> Optional[int]:
-    """Read a lone number from a calibrated crop.
+@dataclass(frozen=True)
+class NumberOCRResult:
+    """A parsed numeric OCR value plus the evidence used to accept it."""
 
-    Use Tesseract's packaged ``digits`` config—not a hand-built
-    ``tessedit_char_whitelist`` flag. On the target Tesseract 5.5 install,
-    the former correctly recognizes thin leading digits while the latter can
-    suppress all LSTM output. Pair it with PSM 7 (a single text line): this is
-    verified for both lone and two-digit HUD values. ``digits`` alone falls
-    back to automatic page layout and misses a lone small digit; PSM 8 also
-    returns empty there, while PSM 10 would truncate multi-digit values.
+    value: Optional[int]
+    raw_text: str
+    confidence: Optional[float]
+
+
+def read_single_number(image: Image.Image, *, diagnostic: bool = False) -> Optional[int] | NumberOCRResult:
+    """Read a lone number using the shared, target-tested numeric config.
+
+    ``diagnostic=True`` returns raw OCR text and mean word confidence for the
+    match reader to reject weak reads. The default remains backwards-compatible
+    and returns only an int or None.
     """
     _require_pytesseract()
     ocr_image = _number_image_for_ocr(image)
     _write_ocr_debug_image(ocr_image)
-    raw = pytesseract.image_to_string(
-        ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG} digits"
-    )
+    config = f"--psm 7 {_OCR_DPI_CONFIG} digits"
+    raw = pytesseract.image_to_string(ocr_image, config=config)
     match = re.search(r"\d+", raw)
-    return int(match.group()) if match else None
+    result = NumberOCRResult(
+        value=int(match.group()) if match else None,
+        raw_text=raw,
+        confidence=_numeric_ocr_confidence(ocr_image, config),
+    )
+    return result if diagnostic else result.value
+
+
+def _numeric_ocr_confidence(image: Image.Image, config: str) -> Optional[float]:
+    """Return mean non-negative Tesseract word confidence, if available.
+
+    Confidence is deliberately optional at this low level: callers which need
+    safety can reject an unavailable value, while simple calibration previews
+    can still show raw OCR text on older pytesseract installations.
+    """
+    try:
+        data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
+        confidences = [
+            float(conf)
+            for text, conf in zip(data.get("text", []), data.get("conf", []))
+            if str(text).strip() and float(conf) >= 0
+        ]
+    except Exception:  # noqa: BLE001 - confidence is diagnostic, never a fatal read error
+        return None
+    return sum(confidences) / len(confidences) if confidences else None
 
 
 def _read_text_line(image: Image.Image) -> str:

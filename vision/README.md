@@ -32,7 +32,8 @@ instead of relying on just one player's stamina.
 HUD position depends on your resolution and in-game HUD scale setting, so
 region coordinates can't be hardcoded - you have to find them.
 
-1. **Get a gridded screenshot** while FIFA is running (or paused):
+1. **Get a screenshot** while FIFA is running (or paused). You can still make
+   a gridded reference image:
    ```
    python vision/calibrate.py --grab
    ```
@@ -40,7 +41,24 @@ region coordinates can't be hardcoded - you have to find them.
    labels every 100px. Open it and note the approximate pixel position of
    the score, clock, and stamina bars.
 
-2. **Test a candidate region** against a real screenshot before trusting it:
+2. **Use the click-and-drag selector instead of hand-editing coordinates:**
+   ```bash
+   python vision/calibrate.py --select --image calibration_grid.png
+   ```
+   Select a region name in the left list, then drag its rectangle on the
+   screenshot. Each completed drag writes `left`, `top`, `width`, and `height`
+   to `vision/regions.json` immediately. Use **Add team stamina bar** for each
+   additional player bar. This is a standalone calibration tool; it is never
+   part of the live match loop.
+
+   Validate the saved calibration before using it:
+   ```bash
+   python vision/calibrate.py --validate
+   ```
+   This checks configured rectangles against conservative content-width
+   minimums and exits non-zero with `WARNING` lines for tight crops.
+
+3. **Test a candidate region** against a real screenshot before trusting it:
    ```
    python vision/calibrate.py --test-region --image calibration_grid.png --left 820 --top 40 --width 60 --height 30 --kind score
    ```
@@ -49,7 +67,7 @@ region coordinates can't be hardcoded - you have to find them.
    left/top/width/height and re-run until it reads correctly. Repeat for
    `clock` and `stamina`.
 
-3. **Write the working coordinates into `regions.json`**, e.g.:
+4. **Write the working coordinates into `regions.json`**, e.g.:
    ```json
    "my_score": {"left": 820, "top": 40, "width": 60, "height": 30}
    ```
@@ -68,7 +86,7 @@ region coordinates can't be hardcoded - you have to find them.
    coordinates: calibrate them against your own screenshot before enabling the
    region in `regions.json`.
 
-4. Once all regions are calibrated, `vision/match_reader.py` can read a
+5. Once all regions are calibrated, `vision/match_reader.py` can read a
    partial match state from either a saved screenshot or the live screen.
 
 ## Files
@@ -88,6 +106,39 @@ region coordinates can't be hardcoded - you have to find them.
 runs the real OCR/color-analysis pipeline against it - the same code path
 used for a live screenshot, just pointed at a generated test image instead.
 Run it with `python tests/test_vision.py`.
+
+## Saved-screen self-test
+
+Put representative saved screenshots in a folder and add an
+`expectations.json` mapping filenames to expected fields:
+
+```json
+{
+  "match_stats_01.png": {"shots": 14, "pass_accuracy_pct": 88},
+  "clock_stoppage.png": {"minute": 47}
+}
+```
+
+Then run:
+
+```bash
+python -m vision.match_reader --self-test path/to/samples
+```
+
+The command prints a PASS/FAIL line for every expected field and a summary.
+It is intended for recalibration after a FIFA UI update; it uses the real OCR
+engine on your machine, so its result must be reviewed there rather than
+assumed from this sandbox.
+
+## Bad-read handling
+
+Numeric match-menu OCR is accepted only when it parses as a number, is within
+that field's sensible range, and has mean Tesseract word confidence of at
+least **60/100**. A failed parse, unavailable/low confidence, or out-of-range
+value is omitted from the partial state and logged in `_read_errors` with the
+raw OCR text. It therefore reaches downstream advice as `unknown`, never a
+fabricated zero. The 60 threshold intentionally favors an unknown value over
+a marginal OCR guess.
 
 ## OCR change verification is mandatory
 

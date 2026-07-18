@@ -21,6 +21,8 @@ from vision.ocr import (
     parse_formation_text, stamina_fill_percent, read_single_number, read_minute,
 )
 from vision.capture import ScreenRegion, grab_region
+from vision.calibrate import validate_regions_file
+from vision.match_reader import self_test_samples
 
 FIXTURE_PATH = Path(__file__).parent / "_fixture_hud.png"
 
@@ -153,6 +155,58 @@ def test_parse_formation_label_variants():
     print("OK - formation-label parsing accepts supported tactics-menu text")
 
 
+def test_region_validation_warns_for_too_narrow_stat_crop(tmp_path=None):
+    """Configuration-only guard: no screen or OCR engine is required."""
+    import json
+    import tempfile
+
+    temp_dir = Path(tempfile.mkdtemp()) if tmp_path is None else tmp_path
+    regions = temp_dir / "regions.json"
+    regions.write_text(json.dumps({"regions": {"shots": {"left": 1, "top": 2, "width": 25, "height": 20}}, "team_stamina_bars": []}))
+    warnings = validate_regions_file(regions)
+    assert any("shots" in warning and "80x40" in warning for warning in warnings)
+    print("OK - narrow stats crop triggers a calibration width warning")
+
+
+def test_garbled_numeric_ocr_is_unknown_not_zero():
+    """Mock realistic weak OCR text ('l7?\\n'), not an OCR engine result."""
+    import json
+    import tempfile
+    import vision.capture as capture_module
+    import vision.match_reader as reader_module
+    from vision.ocr import NumberOCRResult
+
+    temp_dir = Path(tempfile.mkdtemp())
+    screenshot = temp_dir / "sample.png"
+    Image.new("RGB", (100, 80), "black").save(screenshot)
+    regions = temp_dir / "regions.json"
+    regions.write_text(json.dumps({"regions": {"shots": {"left": 0, "top": 0, "width": 80, "height": 40}}, "team_stamina_bars": []}))
+    original_regions, original_reader = capture_module.REGIONS_PATH, reader_module.read_single_number
+    capture_module.REGIONS_PATH = regions
+    reader_module.read_single_number = lambda _image, diagnostic=False: NumberOCRResult(None, "l7?\\n", 18.0)
+    try:
+        result = reader_module.read_partial_match_state(source_image=screenshot)
+    finally:
+        capture_module.REGIONS_PATH, reader_module.read_single_number = original_regions, original_reader
+
+    assert "shots" not in result
+    assert "l7?" in result["_read_errors"]["shots"]
+    print("OK - garbled numeric OCR leaves shots unknown and logs raw text")
+
+
+def test_saved_sample_self_test_summary():
+    """Self-test runner is exercised with a saved image and injected reader."""
+    import json
+    import tempfile
+
+    samples = Path(tempfile.mkdtemp())
+    Image.new("RGB", (20, 20), "black").save(samples / "sample.png")
+    (samples / "expectations.json").write_text(json.dumps({"sample.png": {"shots": 14}}))
+    passed, failed = self_test_samples(samples, reader=lambda _path: {"shots": 14})
+    assert (passed, failed) == (1, 0)
+    print("OK - saved-sample self-test prints a passing field summary")
+
+
 def _make_stamina_bar_image(fill_fraction: float, width: int = 200, height: int = 20) -> Image.Image:
     """Build a synthetic stamina bar: bright 'filled' portion on the left,
     dark background on the right - mimicking a typical game HUD bar."""
@@ -268,6 +322,10 @@ if __name__ == "__main__":
     test_match_reader_reads_stats_and_team_stamina_average()
     test_parse_score_text_variants()
     test_parse_minute_text_variants()
+    test_parse_formation_label_variants()
+    test_region_validation_warns_for_too_narrow_stat_crop()
+    test_garbled_numeric_ocr_is_unknown_not_zero()
+    test_saved_sample_self_test_summary()
     test_stamina_fill_percent_full_bar()
     test_stamina_fill_percent_half_bar()
     test_stamina_fill_percent_empty_bar()
