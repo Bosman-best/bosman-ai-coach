@@ -232,13 +232,14 @@ class MainWindow(QMainWindow):
         text as well as its outline, so labels, values, buttons and dropdowns
         remain readable over the moving photo background.
         """
-        # QSpinBox is deliberately excluded: its internal numeric text renders
-        # through a child editor and a graphics shadow produces a doubled/blurred
-        # glyph on some platforms. Its light input fill and border provide the
-        # required contrast without an effect.
+        # Do not apply an effect to QSpinBox (or a QGroupBox that contains it).
+        # A group-box effect shadows its complete composited child tree, so it
+        # duplicates the numeric glyphs even when the spin box itself is
+        # excluded. The stat fields are plain QSpinBox instances, not a custom
+        # subclass; removing the parent effect covers every current and future
+        # spin-box-based field via inheritance/composition.
         shadowed_types = (
-            QGroupBox, QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox,
-            QTextEdit,
+            QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox, QTextEdit,
         )
         for widget in [content, *content.findChildren(QWidget)]:
             if not isinstance(widget, shadowed_types):
