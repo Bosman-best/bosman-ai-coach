@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QSpinBox, QComboBox, QCheckBox, QLineEdit, QPushButton,
     QLabel, QTextEdit, QSlider, QMessageBox, QScrollArea, QSizePolicy, QFrame,
+    QGraphicsDropShadowEffect,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -67,7 +68,9 @@ class CoverBackgroundWidget(QWidget):
             x = (target.width() - scaled.width()) // 2
             y = (target.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
-        painter.fillRect(target, QColor(0, 0, 0, 140))  # approximately rgba(0,0,0,0.55)
+        # Slightly stronger than the first pass so translucent panels remain
+        # legible over floodlights/crowd detail without hiding the photo.
+        painter.fillRect(target, QColor(0, 0, 0, 153))  # approximately rgba(0,0,0,0.60)
 
 
 def load_config() -> AppConfig:
@@ -219,18 +222,40 @@ class MainWindow(QMainWindow):
         self.scroll_area.setWidget(content)
         outer.addWidget(self.scroll_area)
         self._apply_theme()
+        self._apply_text_and_control_shadows(content)
+
+    def _apply_text_and_control_shadows(self, content: QWidget) -> None:
+        """Give text-bearing widgets a consistent, subtle floating shadow.
+
+        Qt stylesheets do not implement CSS ``text-shadow``. Applying a
+        QGraphicsDropShadowEffect to each leaf control shadows its rendered
+        text as well as its outline, so labels, values, buttons and dropdowns
+        remain readable over the moving photo background.
+        """
+        shadowed_types = (
+            QGroupBox, QLabel, QLineEdit, QComboBox, QSpinBox, QPushButton,
+            QCheckBox, QTextEdit,
+        )
+        for widget in [content, *content.findChildren(QWidget)]:
+            if not isinstance(widget, shadowed_types):
+                continue
+            shadow = QGraphicsDropShadowEffect(widget)
+            shadow.setColor(QColor(0, 0, 0, 205))  # rgba(0, 0, 0, 0.80)
+            shadow.setOffset(1.5, 2.0)
+            shadow.setBlurRadius(4.0)
+            widget.setGraphicsEffect(shadow)
 
     def _apply_theme(self) -> None:
-        """Keep panel islands opaque while the surrounding scroll surface is transparent."""
+        """Use translucent panel grouping while preserving high-contrast controls."""
         self.setStyleSheet("""
             QWidget { color: #edf4ff; font-family: Segoe UI, Arial, sans-serif; }
             QWidget#scrollContent { background: transparent; }
             QLabel#appTitle { font-size: 28px; font-weight: 800; letter-spacing: 2px; color: #ffffff; padding-top: 4px; }
             QLabel#appSubtitle { font-size: 13px; font-weight: 500; color: #c8d8eb; padding-bottom: 4px; }
-            QGroupBox { background-color: #0d1b36; border: 1px solid #365476; border-radius: 8px; margin-top: 14px; padding: 16px 14px 14px 14px; font-size: 16px; font-weight: 750; color: #f4f8ff; }
-            QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 7px; color: #8dd4ff; background-color: #0d1b36; }
-            QLabel { font-size: 13px; font-weight: 600; }
-            QLineEdit, QComboBox, QSpinBox, QTextEdit { background-color: #f2f6fb; color: #10213b; border: 1px solid #6885a6; border-radius: 4px; min-height: 26px; padding: 3px 7px; font-size: 13px; font-weight: 500; }
+            QGroupBox { background-color: rgba(2, 14, 35, 46); border: 1px solid rgba(141, 212, 255, 155); border-radius: 8px; margin-top: 14px; padding: 16px 14px 14px 14px; font-size: 16px; font-weight: 750; color: #f4f8ff; }
+            QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 7px; color: #8dd4ff; background-color: transparent; }
+            QLabel { font-size: 13px; font-weight: 600; color: #f4f8ff; }
+            QLineEdit, QComboBox, QSpinBox, QTextEdit { background-color: rgba(242, 246, 251, 232); color: #10213b; border: 1px solid #8db9df; border-radius: 4px; min-height: 26px; padding: 3px 7px; font-size: 13px; font-weight: 500; }
             QComboBox::drop-down { border: 0; width: 22px; }
             QSlider::groove:horizontal { height: 7px; border-radius: 3px; background: #476582; }
             QSlider::handle:horizontal { width: 16px; margin: -5px 0; border-radius: 8px; background: #8dd4ff; }
