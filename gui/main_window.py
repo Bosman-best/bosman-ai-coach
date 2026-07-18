@@ -18,11 +18,11 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QSpinBox, QComboBox, QCheckBox, QLineEdit, QPushButton,
-    QLabel, QTextEdit, QSlider, QMessageBox,
+    QLabel, QTextEdit, QSlider, QMessageBox, QScrollArea, QSizePolicy, QFrame,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -37,9 +37,37 @@ from voice.stt import VoiceInputEngine
 CONFIG_PATH = ROOT / "config.yaml"
 SCENARIOS_PATH = ROOT / "data" / "simulated_scenarios.json"
 DEFAULT_VOSK_MODEL_PATH = ROOT / "voice" / "model"
-BANNER_PATH = Path(__file__).parent / "assets" / "header_banner.png"
+BACKGROUND_PATH = Path(__file__).parent / "assets" / "coach_bg.jpg"
 
 THREAT_SIDE_OPTIONS = ["(none)", "left_wing", "right_wing", "through_middle"]
+
+
+class CoverBackgroundWidget(QWidget):
+    """Paint ``coach_bg.jpg`` behind child widgets using a cover crop.
+
+    A QPixmap is scaled with KeepAspectRatioByExpanding, then centered and
+    clipped by the widget, so resize/maximize never stretches the photo. The
+    dark overlay is painted here rather than relying on stylesheet alpha, which
+    keeps every form panel independently opaque and legible.
+    """
+
+    def __init__(self, image_path: Path, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._background = QPixmap(str(image_path)) if image_path.exists() else QPixmap()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        target = self.rect()
+        if self._background.isNull():
+            painter.fillRect(target, QColor("#071426"))
+        else:
+            scaled = self._background.scaled(
+                target.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            )
+            x = (target.width() - scaled.width()) // 2
+            y = (target.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+        painter.fillRect(target, QColor(0, 0, 0, 140))  # approximately rgba(0,0,0,0.55)
 
 
 def load_config() -> AppConfig:
@@ -108,7 +136,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Bosman AI Coach")
-        self.resize(760, 700)
+        self.resize(900, 760)
+        self.setMinimumSize(640, 520)
 
         self.config = load_config()
         self.client = OllamaClient(self.config)
@@ -137,46 +166,82 @@ class MainWindow(QMainWindow):
     # UI construction
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        """Build scrollable panels over a cover-scaled background.
 
-        root_layout.addWidget(self._build_header_banner())
-        root_layout.addWidget(self._build_scenario_bar())
-        root_layout.addWidget(self._build_match_form())
-        root_layout.addWidget(self._build_stats_form())
+        The content uses Qt layouts exclusively: QVBoxLayout for the section
+        stack, QFormLayout for form rows, and QHBoxLayout for paired controls.
+        QScrollArea owns overflow at every window size, so controls are never
+        clipped or manually positioned.
+        """
+        central = CoverBackgroundWidget(BACKGROUND_PATH)
+        self.setCentralWidget(central)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+
+        content = QWidget()
+        content.setObjectName("scrollContent")
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 24, 24, 28)
+        layout.setSpacing(16)
+
+        title = QLabel("BOSMAN AI COACH")
+        title.setObjectName("appTitle")
+        title.setAlignment(Qt.AlignCenter)
+        subtitle = QLabel("Live tactical guidance — read-only match analysis")
+        subtitle.setObjectName("appSubtitle")
+        subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(self._build_scenario_bar())
+        layout.addWidget(self._build_match_form())
+        layout.addWidget(self._build_stats_form())
 
         self.ask_button = QPushButton("ASK COACH")
-        self.ask_button.setMinimumHeight(40)
+        self.ask_button.setObjectName("askButton")
+        self.ask_button.setMinimumHeight(44)
         self.ask_button.clicked.connect(self._on_ask_coach)
-        root_layout.addWidget(self.ask_button)
+        layout.addWidget(self.ask_button)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: gray;")
-        root_layout.addWidget(self.status_label)
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self._build_output_panel())
+        layout.addStretch(1)
 
-        root_layout.addWidget(self._build_output_panel())
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area)
+        self._apply_theme()
 
-    def _build_header_banner(self) -> QWidget:
-        """Illustrated header banner - original artwork generated by
-        gui/assets/generate_banner.py, no real people or club branding
-        (see that file's docstring for why). Falls back to a plain title
-        label if the PNG is ever missing, so a bad/absent asset can't
-        break the app from launching."""
-        label = QLabel()
-        pixmap = QPixmap(str(BANNER_PATH)) if BANNER_PATH.exists() else QPixmap()
-        if not pixmap.isNull():
-            label.setPixmap(pixmap)
-            label.setScaledContents(True)
-            label.setFixedHeight(160)
-        else:
-            label.setText("BOSMAN AI COACH")
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(
-                "background-color: #0d1b36; color: white; font-size: 28px; "
-                "font-weight: bold; padding: 24px;"
-            )
-        return label
+    def _apply_theme(self) -> None:
+        """Keep panel islands opaque while the surrounding scroll surface is transparent."""
+        self.setStyleSheet("""
+            QWidget { color: #edf4ff; font-family: Segoe UI, Arial, sans-serif; }
+            QWidget#scrollContent { background: transparent; }
+            QLabel#appTitle { font-size: 28px; font-weight: 800; letter-spacing: 2px; color: #ffffff; padding-top: 4px; }
+            QLabel#appSubtitle { font-size: 13px; font-weight: 500; color: #c8d8eb; padding-bottom: 4px; }
+            QGroupBox { background-color: #0d1b36; border: 1px solid #365476; border-radius: 8px; margin-top: 14px; padding: 16px 14px 14px 14px; font-size: 16px; font-weight: 750; color: #f4f8ff; }
+            QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 7px; color: #8dd4ff; background-color: #0d1b36; }
+            QLabel { font-size: 13px; font-weight: 600; }
+            QLineEdit, QComboBox, QSpinBox, QTextEdit { background-color: #f2f6fb; color: #10213b; border: 1px solid #6885a6; border-radius: 4px; min-height: 26px; padding: 3px 7px; font-size: 13px; font-weight: 500; }
+            QComboBox::drop-down { border: 0; width: 22px; }
+            QSlider::groove:horizontal { height: 7px; border-radius: 3px; background: #476582; }
+            QSlider::handle:horizontal { width: 16px; margin: -5px 0; border-radius: 8px; background: #8dd4ff; }
+            QPushButton { background-color: #244d78; border: 1px solid #6397c5; border-radius: 5px; padding: 7px 12px; font-size: 13px; font-weight: 700; color: #ffffff; }
+            QPushButton:hover { background-color: #32699f; }
+            QPushButton#askButton { background-color: #11a36d; border-color: #6de4b8; font-size: 16px; font-weight: 800; letter-spacing: 1px; }
+            QPushButton#askButton:hover { background-color: #16ba7c; }
+            QTextEdit { min-height: 120px; }
+            QLabel#statusLabel { color: #d0e2f4; font-size: 12px; font-weight: 600; }
+            QCheckBox { font-size: 13px; font-weight: 600; spacing: 7px; }
+        """)
 
     def _build_scenario_bar(self) -> QWidget:
         box = QGroupBox("Load a simulated scenario (optional)")
@@ -193,6 +258,10 @@ class MainWindow(QMainWindow):
     def _build_match_form(self) -> QWidget:
         box = QGroupBox("Match situation")
         form = QFormLayout(box)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
 
         self.minute_spin = QSpinBox()
         self.minute_spin.setRange(0, 120)
@@ -285,8 +354,12 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_stats_form(self) -> QWidget:
-        box = QGroupBox("Match stats (optional - from the pause/stats screen)")
+        box = QGroupBox("Match stats (optional — pause/stats or tactics menus)")
         form = QFormLayout(box)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
 
         def _stat_spinbox(maximum: int = 50) -> QSpinBox:
             s = QSpinBox()
