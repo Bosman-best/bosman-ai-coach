@@ -95,14 +95,27 @@ This requirement follows the leading-`1` stats regression: a change from PSM
 Tesseract 5.5 testing showed that a manually supplied LSTM
 `-c tessedit_char_whitelist=...` call could suppress output entirely. The
 module now upscales OCR crops and uses Tesseract's packaged `digits` config
-for standalone numeric OCR, but that behavior still needs a real local
-Tesseract test after every OCR-related edit.
+with `--psm 7` for standalone numeric OCR, but that behavior still needs a
+real local Tesseract test after every OCR-related edit.
 
-**`tessedit_char_whitelist` should not be used for digit OCR in this project;
-use Tesseract's built-in `digits` config instead.** The manual whitelist has
-produced empty output on the target LSTM installation, while the native
-`digits` config was proven by the Tesseract CLI to recognize the same `17`
-crop correctly.
+**Use `--psm 7` together with Tesseract's built-in `digits` config for all
+standalone numeric OCR in this project.** Do not use `digits` alone: it falls
+back to full automatic page layout and returns “Empty page” for a small
+single-digit crop. Do not substitute `--psm 8` (empty output for a lone digit)
+or `--psm 10` (would truncate multi-digit values). The `--psm 7 digits`
+combination was proven by the target Tesseract 5.5 CLI for both a lone digit
+and a two-digit `14` crop.
+
+**`tessedit_char_whitelist` should not be used for digit OCR in this project.**
+Use the packaged `digits` config instead. The manual whitelist has produced
+empty output on the target LSTM installation.
+
+`read_score` and `read_minute` deliberately remain on their existing
+unconstrained `--psm 7` path: score parsing needs the score separator (`-` or
+spaces), while clock input can include `:`. Applying the digits-only config to
+those differently shaped strings could remove the separator before their
+format parsers run. Their Python parsers already validate the expected numeric
+structure after OCR.
 
 For diagnosis, set `BOSMAN_OCR_DEBUG_PATH` to a PNG path; `ocr.py` writes the
 exact prepared (upscaled) image supplied to Tesseract there.

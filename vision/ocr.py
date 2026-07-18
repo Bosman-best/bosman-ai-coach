@@ -81,14 +81,17 @@ def read_single_number(image: Image.Image) -> Optional[int]:
     Use Tesseract's packaged ``digits`` config—not a hand-built
     ``tessedit_char_whitelist`` flag. On the target Tesseract 5.5 install,
     the former correctly recognizes thin leading digits while the latter can
-    suppress all LSTM output. ``config="digits"`` is intentionally the exact
-    CLI invocation already proven on that install (``tesseract image stdout
-    digits``); do not layer unverified PSM/DPI flags onto it here.
+    suppress all LSTM output. Pair it with PSM 7 (a single text line): this is
+    verified for both lone and two-digit HUD values. ``digits`` alone falls
+    back to automatic page layout and misses a lone small digit; PSM 8 also
+    returns empty there, while PSM 10 would truncate multi-digit values.
     """
     _require_pytesseract()
     ocr_image = _number_image_for_ocr(image)
     _write_ocr_debug_image(ocr_image)
-    raw = pytesseract.image_to_string(ocr_image, config="digits")
+    raw = pytesseract.image_to_string(
+        ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG} digits"
+    )
     match = re.search(r"\d+", raw)
     return int(match.group()) if match else None
 

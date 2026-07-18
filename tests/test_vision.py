@@ -56,6 +56,22 @@ def test_score_ocr_reads_real_image():
     print("OK - OCR reads a real synthetic scoreboard image correctly (2-1)")
 
 
+def test_single_digit_ocr_reads_real_image():
+    """Real-Tesseract regression for PSM 7 + digits on a lone HUD digit."""
+    from PIL import ImageFont
+
+    image = Image.new("RGB", (60, 45), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((15, 7), "5", fill=(255, 255, 255), font=font)
+
+    assert read_single_number(image) == 5
+    print("OK - OCR reads a lone digit with PSM 7 + digits")
+
+
 def test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract():
     """Exercise the non-Tesseract safeguards with a deterministic fake engine."""
     class FakeTesseract:
@@ -77,9 +93,10 @@ def test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract():
 
     assert result == 17
     assert fake.image.size == (240, 180)
-    assert fake.config == "digits"
+    assert "--psm 7" in fake.config
+    assert "digits" in fake.config
     assert "tessedit_char_whitelist" not in fake.config
-    print("OK - number OCR upscales 4x and uses Tesseract's packaged digits config")
+    print("OK - number OCR upscales 4x and uses PSM 7 with Tesseract's digits config")
 
 
 def test_single_number_ocr_preserves_leading_one():
@@ -216,6 +233,7 @@ def test_match_reader_reads_stats_and_team_stamina_average():
 
 if __name__ == "__main__":
     test_score_ocr_reads_real_image()
+    test_single_digit_ocr_reads_real_image()
     test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract()
     test_single_number_ocr_preserves_leading_one()
     test_clock_ocr_reads_real_image()
