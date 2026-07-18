@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.schemas import MatchState, AdviceResponse, Formation, PlayingStyle, PossessionTrend, AppConfig
+from core.schemas import MatchState, AdviceResponse, Formation, PlayingStyle, PossessionTrend, MatchHalf, AppConfig
 from core.ollama_client import OllamaClient, OllamaError
 from core.reasoning_engine import get_advice
 from voice.tts import TTSEngine, advice_to_speech_text
@@ -199,6 +199,10 @@ class MainWindow(QMainWindow):
         self.minute_spin.setValue(45)
         form.addRow("Minute:", self.minute_spin)
 
+        self.match_half_combo = QComboBox()
+        self.match_half_combo.addItems(["(not tracked)"] + [half.value for half in MatchHalf])
+        form.addRow("Match half/state:", self.match_half_combo)
+
         score_row = QHBoxLayout()
         self.my_score_spin = QSpinBox()
         self.my_score_spin.setRange(0, 20)
@@ -284,16 +288,16 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Match stats (optional - from the pause/stats screen)")
         form = QFormLayout(box)
 
-        def _stat_spinbox() -> QSpinBox:
+        def _stat_spinbox(maximum: int = 50) -> QSpinBox:
             s = QSpinBox()
-            s.setRange(0, 50)
+            s.setRange(0, maximum)
             s.setValue(0)
             s.setSpecialValueText("(not tracked)")
             return s
 
-        def _paired_row(label_left: str, label_right: str) -> tuple[QSpinBox, QSpinBox, QWidget]:
-            left_spin = _stat_spinbox()
-            right_spin = _stat_spinbox()
+        def _paired_row(label_left: str, label_right: str, maximum: int = 50) -> tuple[QSpinBox, QSpinBox, QWidget]:
+            left_spin = _stat_spinbox(maximum)
+            right_spin = _stat_spinbox(maximum)
             row = QHBoxLayout()
             row.addWidget(QLabel(label_left))
             row.addWidget(left_spin)
@@ -311,6 +315,16 @@ class MainWindow(QMainWindow):
 
         self.corners_spin, self.opp_corners_spin, corners_widget = _paired_row("Us:", "Opponent:")
         form.addRow("Corners:", corners_widget)
+
+        self.pass_accuracy_spin, self.opp_pass_accuracy_spin, pass_accuracy_widget = _paired_row("Us:", "Opponent:", maximum=100)
+        form.addRow("Pass accuracy %:", pass_accuracy_widget)
+
+        self.fouls_spin, self.opp_fouls_spin, fouls_widget = _paired_row("Us:", "Opponent:")
+        form.addRow("Fouls committed:", fouls_widget)
+
+        self.menu_formation_combo = QComboBox()
+        self.menu_formation_combo.addItems(["(not tracked)"] + [f.value for f in Formation])
+        form.addRow("Tactics-menu formation:", self.menu_formation_combo)
 
         self.my_yellows_spin, self.opp_yellows_spin, yellows_widget = _paired_row("Us:", "Opponent:")
         form.addRow("Yellow cards:", yellows_widget)
@@ -382,6 +396,7 @@ class MainWindow(QMainWindow):
 
     def _populate_form_from_state(self, state: MatchState) -> None:
         self.minute_spin.setValue(state.minute)
+        self.match_half_combo.setCurrentText(state.match_half.value if state.match_half else "(not tracked)")
         self.my_score_spin.setValue(state.my_score)
         self.opp_score_spin.setValue(state.opponent_score)
         self.formation_combo.setCurrentText(state.formation.value)
@@ -406,6 +421,11 @@ class MainWindow(QMainWindow):
         self.opp_shots_on_target_spin.setValue(state.opponent_shots_on_target or 0)
         self.corners_spin.setValue(state.corners or 0)
         self.opp_corners_spin.setValue(state.opponent_corners or 0)
+        self.pass_accuracy_spin.setValue(state.pass_accuracy_pct or 0)
+        self.opp_pass_accuracy_spin.setValue(state.opponent_pass_accuracy_pct or 0)
+        self.fouls_spin.setValue(state.fouls_committed or 0)
+        self.opp_fouls_spin.setValue(state.opponent_fouls_committed or 0)
+        self.menu_formation_combo.setCurrentText(state.menu_formation.value if state.menu_formation else "(not tracked)")
         self.my_yellows_spin.setValue(state.my_yellow_cards or 0)
         self.opp_yellows_spin.setValue(state.opponent_yellow_cards or 0)
         self.red_card_check.setChecked(state.red_card)
@@ -418,6 +438,8 @@ class MainWindow(QMainWindow):
     def _build_match_state(self) -> MatchState:
         threat_side = self.threat_side_combo.currentText()
         trend = self.possession_trend_combo.currentText()
+        match_half = self.match_half_combo.currentText()
+        menu_formation = self.menu_formation_combo.currentText()
 
         def _optional_stat(spin: QSpinBox):
             return spin.value() if spin.value() > 0 else None
@@ -429,6 +451,7 @@ class MainWindow(QMainWindow):
             formation=Formation(self.formation_combo.currentText()),
             playing_style=PlayingStyle(self.style_combo.currentText()),
             possession_pct=self.possession_slider.value(),
+            match_half=None if match_half == "(not tracked)" else MatchHalf(match_half),
             possession_trend=None if trend == "(not tracked)" else PossessionTrend(trend),
             opponent_threat_side=None if threat_side == "(none)" else threat_side,
             team_stamina_avg_pct=(
@@ -449,6 +472,11 @@ class MainWindow(QMainWindow):
             opponent_shots_on_target=_optional_stat(self.opp_shots_on_target_spin),
             corners=_optional_stat(self.corners_spin),
             opponent_corners=_optional_stat(self.opp_corners_spin),
+            pass_accuracy_pct=_optional_stat(self.pass_accuracy_spin),
+            opponent_pass_accuracy_pct=_optional_stat(self.opp_pass_accuracy_spin),
+            fouls_committed=_optional_stat(self.fouls_spin),
+            opponent_fouls_committed=_optional_stat(self.opp_fouls_spin),
+            menu_formation=None if menu_formation == "(not tracked)" else Formation(menu_formation),
             my_yellow_cards=_optional_stat(self.my_yellows_spin),
             opponent_yellow_cards=_optional_stat(self.opp_yellows_spin),
             red_card=self.red_card_check.isChecked(),

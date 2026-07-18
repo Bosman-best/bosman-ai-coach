@@ -96,16 +96,21 @@ def read_single_number(image: Image.Image) -> Optional[int]:
     return int(match.group()) if match else None
 
 
-def read_score(image: Image.Image) -> Optional[tuple[int, int]]:
-    """Read a scoreline like '1 - 2' or '2-1' from a cropped image.
-    Returns (my_score, opponent_score) or None if it couldn't be parsed."""
+def _read_text_line(image: Image.Image) -> str:
+    """Shared menu-text OCR path for clocks and formation labels.
+
+    Numeric menu fields must use read_single_number(); this helper is only for
+    genuinely textual values where punctuation/letters are meaningful.
+    """
     _require_pytesseract()
     ocr_image = _image_for_ocr(image)
     _write_ocr_debug_image(ocr_image)
-    # Post-parse the unconstrained result rather than using the LSTM-incompatible
-    # character whitelist; parse_score_text is deliberately tolerant of spacing.
-    raw = pytesseract.image_to_string(ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG}")
-    return parse_score_text(raw)
+    return pytesseract.image_to_string(ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG}")
+
+
+def read_score(image: Image.Image) -> Optional[tuple[int, int]]:
+    """Read a scoreline like '1 - 2' or '2-1' from a cropped image."""
+    return parse_score_text(_read_text_line(image))
 
 
 def parse_score_text(raw: str) -> Optional[tuple[int, int]]:
@@ -117,27 +122,53 @@ def parse_score_text(raw: str) -> Optional[tuple[int, int]]:
 
 
 def read_minute(image: Image.Image) -> Optional[int]:
-    """Read the match clock (e.g. '70:23' or "70'") and return just the
-    minute as an int. Returns None if it couldn't be parsed."""
-    _require_pytesseract()
-    ocr_image = _image_for_ocr(image)
-    _write_ocr_debug_image(ocr_image)
-    # Do not pass a character whitelist: Tesseract's LSTM engine can return an
-    # empty result for small crops when constrained this way. The parser keeps
-    # only the leading digits after unconstrained recognition.
-    raw = pytesseract.image_to_string(ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG}")
-    return parse_minute_text(raw)
+    """Read a clock and return elapsed minutes, including stoppage time."""
+    return parse_match_clock_text(_read_text_line(image))[0]
+
+
+def read_match_half(image: Image.Image) -> Optional[str]:
+    """Read an explicit halftime/fulltime state, or infer the active half."""
+    return parse_match_clock_text(_read_text_line(image))[1]
+
+
+def parse_match_clock_text(raw: str) -> tuple[Optional[int], Optional[str]]:
+    """Parse normal, stoppage-time, and break-state FIFA clock text.
+
+    ``45+2`` becomes minute 47; ``HT`` and ``FT`` retain their meaningful
+    state even though no running clock is present.
+    """
+    normalized = raw.strip().upper()
+    if normalized in {"HT", "HALF TIME", "HALFTIME"}:
+        return 45, "halftime"
+    if normalized in {"FT", "FULL TIME", "FULLTIME"}:
+        return 90, "fulltime"
+    match = re.search(r"(\d{1,3})\s*(?:\+\s*(\d{1,2}))?", normalized)
+    if not match:
+        return None, None
+    minute = int(match.group(1)) + int(match.group(2) or 0)
+    if not 0 <= minute <= 130:
+        return None, None
+    return minute, "first_half" if minute <= 45 else "second_half"
 
 
 def parse_minute_text(raw: str) -> Optional[int]:
-    """Pure parsing logic, split out so it can be tested without OCR."""
-    match = re.match(r"\s*(\d+)", raw)
+    """Backward-compatible minute-only wrapper around clock parsing."""
+    return parse_match_clock_text(raw)[0]
+
+
+def parse_formation_text(raw: str) -> Optional[str]:
+    """Extract one supported formation label from tactics/lineup menu text."""
+    normalized = raw.replace("–", "-").replace("—", "-")
+    match = re.search(r"\b([345](?:\s*-\s*[12345]){2,3})\b", normalized)
     if not match:
         return None
-    minute = int(match.group(1))
-    if 0 <= minute <= 130:  # sanity bound - allow generous extra time
-        return minute
-    return None
+    formation = re.sub(r"\s*[-]\s*", "-", match.group(1))
+    return formation if formation in {"4-4-2", "4-3-3", "3-5-2", "4-2-3-1", "5-3-2", "3-4-2-1"} else None
+
+
+def read_formation_label(image: Image.Image) -> Optional[str]:
+    """Read a formation label from a calibrated tactics/lineup menu crop."""
+    return parse_formation_text(_read_text_line(image))
 
 
 def stamina_fill_percent(image: Image.Image) -> Optional[int]:

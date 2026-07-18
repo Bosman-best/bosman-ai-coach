@@ -24,6 +24,22 @@ def test_match_state_from_simulated_scenarios():
         assert 0 <= MatchState.model_validate(scenario["state"]).minute <= 120
 
 
+def test_new_menu_fields_are_optional_and_validate_when_present():
+    # Existing scenario payloads omit these fields; optional defaults keep them
+    # backward compatible while menu/OCR callers can supply explicit values.
+    legacy = _state()
+    assert legacy.pass_accuracy_pct is None
+    assert legacy.fouls_committed is None
+    assert legacy.menu_formation is None
+    enriched = _state(
+        match_half="second_half", pass_accuracy_pct=88,
+        opponent_pass_accuracy_pct=76, fouls_committed=3,
+        opponent_fouls_committed=1, menu_formation="4-3-3",
+    )
+    assert enriched.match_half.value == "second_half"
+    assert enriched.menu_formation.value == "4-3-3"
+
+
 def test_compact_advice_schema_limits_secondary_considerations():
     advice = AdviceResponse.model_validate({
         "top_suggestion": "Use calmer shot selection.",
@@ -104,6 +120,7 @@ def test_invented_enum_value_is_sanitized_not_fatal():
 if __name__ == "__main__":
     tests = [
         test_match_state_from_simulated_scenarios,
+        test_new_menu_fields_are_optional_and_validate_when_present,
         test_compact_advice_schema_limits_secondary_considerations,
         test_combined_stat_reasoning_regressions,
         test_prompt_marks_all_unentered_optional_fields_unknown,

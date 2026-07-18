@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Optional
 
 from vision.capture import grab_region, load_regions, load_team_stamina_bar_regions
-from vision.ocr import read_single_number, read_minute, stamina_fill_percent
+from vision.ocr import (
+    read_single_number, read_minute, read_match_half, read_formation_label,
+    stamina_fill_percent,
+)
 
 
 # Regions that are just "a single number" - same reading logic applies to
@@ -26,6 +29,8 @@ _SIMPLE_NUMBER_REGIONS = [
     "shots", "opponent_shots",
     "shots_on_target", "opponent_shots_on_target",
     "corners", "opponent_corners",
+    "pass_accuracy_pct", "opponent_pass_accuracy_pct",
+    "fouls_committed", "opponent_fouls_committed",
     "my_yellow_cards", "opponent_yellow_cards",
 ]
 
@@ -64,8 +69,11 @@ def read_partial_match_state(source_image: Optional[Path] = None) -> dict:
         try:
             clock_img = grab_region(regions["clock"], source_image)
             minute = read_minute(clock_img)
+            match_half = read_match_half(clock_img)
             if minute is not None:
                 result["minute"] = minute
+            if match_half is not None:
+                result["match_half"] = match_half
         except Exception as e:  # noqa: BLE001
             errors["clock"] = str(e)
 
@@ -96,6 +104,17 @@ def read_partial_match_state(source_image: Optional[Path] = None) -> dict:
                 result[field_name] = value
         except Exception as e:  # noqa: BLE001
             errors[field_name] = str(e)
+
+    # Formation is text from the tactics/lineup menu, not inferred from player
+    # positions. Keep it distinct from the player's manually selected formation.
+    if regions.get("formation_label"):
+        try:
+            formation_img = grab_region(regions["formation_label"], source_image)
+            formation = read_formation_label(formation_img)
+            if formation is not None:
+                result["menu_formation"] = formation
+        except Exception as e:  # noqa: BLE001
+            errors["formation_label"] = str(e)
 
     # Team-wide stamina average - read every calibrated player bar and
     # average the fill percentages, rather than relying on one player.

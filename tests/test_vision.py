@@ -16,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from PIL import Image, ImageDraw
 
 import vision.ocr as ocr_module
-from vision.ocr import parse_score_text, parse_minute_text, stamina_fill_percent, read_single_number, read_minute
+from vision.ocr import (
+    parse_score_text, parse_minute_text, parse_match_clock_text,
+    parse_formation_text, stamina_fill_percent, read_single_number, read_minute,
+)
 from vision.capture import ScreenRegion, grab_region
 
 FIXTURE_PATH = Path(__file__).parent / "_fixture_hud.png"
@@ -135,9 +138,19 @@ def test_parse_minute_text_variants():
     assert parse_minute_text("70:23") == 70
     assert parse_minute_text("70°") == 70  # apostrophe sometimes misread as degree sign
     assert parse_minute_text("  45  ") == 45
+    assert parse_minute_text("45+2") == 47
     assert parse_minute_text("999") is None  # out of sane bounds, rejected
     assert parse_minute_text("nothing here") is None
-    print("OK - minute text parsing handles OCR quirks and rejects nonsense")
+    assert parse_match_clock_text("HT") == (45, "halftime")
+    assert parse_match_clock_text("FT") == (90, "fulltime")
+    print("OK - clock parsing handles stoppage time, break states, and OCR quirks")
+
+
+def test_parse_formation_label_variants():
+    assert parse_formation_text("FORMATION 4 - 3 - 3") == "4-3-3"
+    assert parse_formation_text("4-2-3-1") == "4-2-3-1"
+    assert parse_formation_text("not a formation") is None
+    print("OK - formation-label parsing accepts supported tactics-menu text")
 
 
 def _make_stamina_bar_image(fill_fraction: float, width: int = 200, height: int = 20) -> Image.Image:
@@ -187,8 +200,13 @@ def test_match_reader_reads_stats_and_team_stamina_average():
     except Exception:
         font = ImageFont.load_default()
 
-    draw.rectangle([45, 25, 105, 70], fill=(0, 0, 0))
-    draw.text((60, 32), "14", fill=(255, 255, 255), font=font)
+    # All number crops are 80px wide: enough for a three-digit percent plus
+    # margin and comfortably wider than expected one/two-digit fouls.
+    for left, value in [(45, "14"), (150, "88"), (250, "76"), (350, "3"), (430, "1")]:
+        draw.rectangle([left, 25, left + 80, 70], fill=(0, 0, 0))
+        draw.text((left + 15, 32), value, fill=(255, 255, 255), font=font)
+    draw.rectangle([540, 25, 690, 70], fill=(0, 0, 0))
+    draw.text((555, 32), "4-3-3", fill=(255, 255, 255), font=font)
 
     for i, frac in enumerate([0.8, 0.5, 0.3]):
         bar_left, bar_top, bar_w, bar_h = 50, 400 + i * 40, 150, 15
@@ -204,11 +222,16 @@ def test_match_reader_reads_stats_and_team_stamina_average():
         "regions": {
             "my_score": None, "opponent_score": None, "clock": None,
             "striker_stamina_bar": None, "key_player_stamina_bar": None,
-            "shots": {"left": 45, "top": 25, "width": 60, "height": 45},
+            "shots": {"left": 45, "top": 25, "width": 80, "height": 45},
             "opponent_shots": None, "shots_on_target": None,
             "opponent_shots_on_target": None, "corners": None,
-            "opponent_corners": None, "my_yellow_cards": None,
-            "opponent_yellow_cards": None,
+            "opponent_corners": None,
+            "pass_accuracy_pct": {"left": 150, "top": 25, "width": 80, "height": 45},
+            "opponent_pass_accuracy_pct": {"left": 250, "top": 25, "width": 80, "height": 45},
+            "fouls_committed": {"left": 350, "top": 25, "width": 80, "height": 45},
+            "opponent_fouls_committed": {"left": 430, "top": 25, "width": 80, "height": 45},
+            "formation_label": {"left": 540, "top": 25, "width": 150, "height": 45},
+            "my_yellow_cards": None, "opponent_yellow_cards": None,
         },
         "team_stamina_bars": [
             {"left": 50, "top": 400, "width": 150, "height": 15},
@@ -227,8 +250,13 @@ def test_match_reader_reads_stats_and_team_stamina_average():
         test_regions_path.unlink(missing_ok=True)
 
     assert result["shots"] == 14, result
+    assert result["pass_accuracy_pct"] == 88, result
+    assert result["opponent_pass_accuracy_pct"] == 76, result
+    assert result["fouls_committed"] == 3, result
+    assert result["opponent_fouls_committed"] == 1, result
+    assert result["menu_formation"] == "4-3-3", result
     assert 48 <= result["team_stamina_avg_pct"] <= 58, result  # ~53% expected
-    print("OK - match_reader reads stats and averages team stamina across multiple bars")
+    print("OK - match_reader reads stats, menu formation, and team stamina")
 
 
 if __name__ == "__main__":

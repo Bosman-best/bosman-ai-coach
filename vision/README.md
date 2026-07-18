@@ -61,6 +61,13 @@ region coordinates can't be hardcoded - you have to find them.
    extra background around the text doesn't hurt OCR, but a clipped digit
    gives you a confidently wrong answer.
 
+   For the added menu stats, start with **80 px** wide crops for each pass
+   accuracy or fouls value (room for `100%`/two-digit fouls plus 15–20 px of
+   margin), and **150 px** for the formation label (room for `3-4-2-1` plus
+   its menu label margin). These are starting widths, not portable
+   coordinates: calibrate them against your own screenshot before enabling the
+   region in `regions.json`.
+
 4. Once all regions are calibrated, `vision/match_reader.py` can read a
    partial match state from either a saved screenshot or the live screen.
 
