@@ -257,6 +257,12 @@ class MainWindow(QMainWindow):
             QLabel { font-size: 13px; font-weight: 600; color: #f4f8ff; }
             QLineEdit, QComboBox, QSpinBox, QTextEdit { background-color: rgba(242, 246, 251, 232); color: #10213b; border: 1px solid #8db9df; border-radius: 4px; min-height: 26px; padding: 3px 7px; font-size: 13px; font-weight: 500; }
             QComboBox::drop-down { border: 0; width: 22px; }
+            /* The popup is a separate QAbstractItemView, so style it explicitly
+               rather than relying on the closed combo's foreground color. */
+            QComboBox QAbstractItemView { background-color: #f2f6fb; color: #10213b; border: 1px solid #8db9df; selection-background-color: #32699f; selection-color: #ffffff; outline: 0; padding: 3px; font-size: 13px; font-weight: 500; }
+            QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 8px; color: #10213b; background-color: #f2f6fb; }
+            QComboBox QAbstractItemView::item:hover { background-color: #d9eaff; color: #10213b; }
+            QComboBox QAbstractItemView::item:selected { background-color: #32699f; color: #ffffff; }
             QSlider::groove:horizontal { height: 7px; border-radius: 3px; background: #476582; }
             QSlider::handle:horizontal { width: 16px; margin: -5px 0; border-radius: 8px; background: #8dd4ff; }
             QPushButton { background-color: #244d78; border: 1px solid #6397c5; border-radius: 5px; padding: 7px 12px; font-size: 13px; font-weight: 700; color: #ffffff; }
