@@ -113,16 +113,18 @@ class RegionSelector:
 
         self.tk = tk
         self.regions_path = regions_path
-        self.image = Image.open(image_path).convert("RGB")
-        self.photo = ImageTk.PhotoImage(self.image)
         self.start: Optional[tuple[int, int]] = None
         self.rectangle: Optional[int] = None
         raw = json.loads(regions_path.read_text())
         self.names = list(raw.get("regions", {}).keys())
         self.names.extend(f"team_stamina_{i}" for i, _bar in enumerate(raw.get("team_stamina_bars", [])))
 
+        # ImageTk.PhotoImage requires a live Tk interpreter. Create the root
+        # before constructing any PhotoImage (Windows raises "Too early to
+        # create image" otherwise), then build widgets and attach the image.
         self.root = tk.Tk()
         self.root.title("Bosman region calibration — select a field, then drag")
+        self.image = Image.open(image_path).convert("RGB")
         frame = ttk.Frame(self.root, padding=8)
         frame.grid(sticky="nsew")
         self.root.rowconfigure(0, weight=1)
@@ -136,8 +138,9 @@ class RegionSelector:
         self.listbox.selection_set(0)
         self.listbox.grid(row=0, column=0, sticky="ns", padx=(0, 8))
         self.canvas = tk.Canvas(frame, width=min(self.image.width, 1100), height=min(self.image.height, 750), scrollregion=(0, 0, self.image.width, self.image.height))
-        self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
         self.canvas.grid(row=0, column=1, sticky="nsew")
+        self.photo = ImageTk.PhotoImage(self.image, master=self.root)
+        self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
         vertical = ttk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=self.canvas.xview)
         vertical.grid(row=0, column=2, sticky="ns")
