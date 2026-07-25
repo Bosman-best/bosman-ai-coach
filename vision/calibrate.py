@@ -11,7 +11,16 @@ on your own screen. This script has two modes:
 
     python vision/calibrate.py --grab
 
-2. Test a candidate region against a saved screenshot, to check the crop
+2. Select regions from an existing image or a fresh read-only screen capture:
+
+    python vision/calibrate.py --select --capture
+    python vision/calibrate.py --select --image screenshot.png
+
+3. Save a screen capture directly for saved-screen self-tests:
+
+    python vision/calibrate.py --capture-sample fifa_stats_01.png
+
+4. Test a candidate region against a saved screenshot, to check the crop
    is right and OCR can actually read it, BEFORE writing it into
    regions.json and relying on it during a real match.
 
@@ -23,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -176,6 +186,39 @@ class RegionSelector:
         self.root.mainloop()
 
 
+SAMPLES_DIR = Path(__file__).parent / "samples"
+
+
+def capture_to_samples(
+    samples_dir: Path = SAMPLES_DIR,
+    filename: Optional[str] = None,
+    *,
+    capture_fn=grab_full_screen,
+    now_fn=datetime.now,
+) -> Path:
+    """Use the shared mss capture path and save a read-only screen image.
+
+    This contains no input, focus, or gameplay automation. ``capture_fn`` is
+    injectable solely to test path plumbing without a real display.
+    """
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    if filename is None:
+        filename = f"capture_{now_fn():%Y%m%d_%H%M%S}.png"
+    destination = samples_dir / Path(filename).name
+    image = capture_fn()
+    image.save(destination)
+    return destination
+
+
+def selector_image_path(
+    args, *, capture_fn=grab_full_screen, now_fn=datetime.now, samples_dir: Path = SAMPLES_DIR
+) -> Path:
+    """Resolve --select's existing-image or freshly-captured source."""
+    if args.capture:
+        return capture_to_samples(samples_dir, capture_fn=capture_fn, now_fn=now_fn)
+    return args.image
+
+
 def grab_calibration_screenshot(out_path: Path, grid_spacing: int = 100) -> Path:
     """Grab the full screen and draw a coordinate grid on top, so you can
     read off approximate pixel positions in any image viewer."""
@@ -217,23 +260,39 @@ def test_region(image_path: Path, left: int, top: int, width: int, height: int, 
         print(f"Unknown kind '{kind}' - use score, clock, or stamina.")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Bosman AI Coach - region calibration helper")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Bosman AI Coach - read-only region calibration helper")
     parser.add_argument("--grab", action="store_true", help="Capture a gridded full-screen screenshot")
     parser.add_argument("--out", type=Path, default=Path("calibration_grid.png"))
-    parser.add_argument("--select", action="store_true", help="Open click-and-drag region selector for a saved screenshot")
+    parser.add_argument("--select", action="store_true", help="Open click-and-drag region selector")
+    parser.add_argument("--capture", action="store_true", help="With --select, capture the current screen into vision/samples first")
+    parser.add_argument("--capture-sample", metavar="NAME.png", help="Capture current screen directly into vision/samples/NAME.png, no GUI")
     parser.add_argument("--regions", type=Path, default=Path(__file__).parent / "regions.json")
     parser.add_argument("--validate", action="store_true", help="Warn about regions.json crops that are too tight")
 
     parser.add_argument("--test-region", action="store_true", help="Test a candidate region")
-    parser.add_argument("--image", type=Path, help="Saved screenshot to test against")
+    parser.add_argument("--image", type=Path, help="Saved screenshot to test against (or use --select --capture)")
     parser.add_argument("--left", type=int)
     parser.add_argument("--top", type=int)
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--kind", choices=["score", "clock", "stamina"], help="What to read from the region")
+    return parser
 
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
+
+    if args.capture_sample:
+        if any(sep in args.capture_sample for sep in ("/", "\\")):
+            parser.error("--capture-sample accepts a filename only, not a path")
+        path = capture_to_samples(filename=args.capture_sample)
+        print(f"Saved screen capture to {path}")
+        return
+
+    if args.capture and not args.select:
+        parser.error("--capture is only valid together with --select")
 
     if args.validate:
         warnings = validate_regions_file(args.regions)
@@ -244,9 +303,13 @@ def main() -> None:
         return
 
     if args.select:
-        if not args.image:
-            parser.error("--select requires --image SCREENSHOT")
-        RegionSelector(args.image, args.regions).run()
+        if args.image and args.capture:
+            parser.error("use either --image or --capture with --select, not both")
+        if not args.image and not args.capture:
+            parser.error("--select requires --image SCREENSHOT or --capture")
+        image_path = selector_image_path(args)
+        print(f"Opening calibration selector for {image_path}")
+        RegionSelector(image_path, args.regions).run()
         return
 
     if args.grab:

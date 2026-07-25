@@ -21,7 +21,7 @@ from vision.ocr import (
     parse_formation_text, stamina_fill_percent, read_single_number, read_minute,
 )
 from vision.capture import ScreenRegion, grab_region
-from vision.calibrate import validate_regions_file
+from vision.calibrate import build_parser, capture_to_samples, selector_image_path, validate_regions_file
 from vision.match_reader import self_test_samples
 
 FIXTURE_PATH = Path(__file__).parent / "_fixture_hud.png"
@@ -166,6 +166,30 @@ def test_region_validation_warns_for_too_narrow_stat_crop(tmp_path=None):
     warnings = validate_regions_file(regions)
     assert any("shots" in warning and "80x40" in warning for warning in warnings)
     print("OK - narrow stats crop triggers a calibration width warning")
+
+
+def test_capture_arguments_and_selector_path_plumbing():
+    """Argument parsing and capture-to-selector flow require no real display."""
+    import tempfile
+    from datetime import datetime
+
+    parser = build_parser()
+    select_args = parser.parse_args(["--select", "--capture"])
+    sample_args = parser.parse_args(["--capture-sample", "stats.png"])
+    assert select_args.select and select_args.capture and select_args.image is None
+    assert sample_args.capture_sample == "stats.png"
+
+    samples = Path(tempfile.mkdtemp())
+    fake_capture = lambda: Image.new("RGB", (12, 8), "navy")
+    captured = capture_to_samples(
+        samples, capture_fn=fake_capture, now_fn=lambda: datetime(2026, 7, 26, 14, 30, 12)
+    )
+    assert captured == samples / "capture_20260726_143012.png"
+    assert captured.exists()
+    selector_path = selector_image_path(select_args, samples_dir=samples, capture_fn=fake_capture, now_fn=lambda: datetime(2026, 7, 26, 14, 30, 13))
+    assert selector_path.name == "capture_20260726_143013.png"
+    assert selector_path.exists()
+    print("OK - capture arguments save a shared-capture image and pass it to selector flow")
 
 
 def test_garbled_numeric_ocr_is_unknown_not_zero():
@@ -324,6 +348,7 @@ if __name__ == "__main__":
     test_parse_minute_text_variants()
     test_parse_formation_label_variants()
     test_region_validation_warns_for_too_narrow_stat_crop()
+    test_capture_arguments_and_selector_path_plumbing()
     test_garbled_numeric_ocr_is_unknown_not_zero()
     test_saved_sample_self_test_summary()
     test_stamina_fill_percent_full_bar()

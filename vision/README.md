@@ -44,6 +44,18 @@ region coordinates can't be hardcoded - you have to find them.
 2. **Use the click-and-drag selector instead of hand-editing coordinates:**
    ```bash
    python vision/calibrate.py --select --image calibration_grid.png
+   # Or capture the current screen read-only and open it immediately:
+   python vision/calibrate.py --select --capture
+   ```
+   `--capture` reuses the same mss screen-capture code as live vision, saves a
+   timestamped `vision/samples/capture_YYYYMMDD_HHMMSS.png`, then opens that
+   exact file in the selector. It never sends input, changes focus, or
+   automates gameplay.
+
+   To save a named screenshot for a later OCR regression/self-test without
+   opening the selector:
+   ```bash
+   python vision/calibrate.py --capture-sample fifa_stats_01.png
    ```
    Select a region name in the left list, then drag its rectangle on the
    screenshot. Each completed drag writes `left`, `top`, `width`, and `height`
