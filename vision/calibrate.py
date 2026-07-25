@@ -13,7 +13,7 @@ on your own screen. This script has two modes:
 
 2. Select regions from an existing image or a fresh read-only screen capture:
 
-    python vision/calibrate.py --select --capture
+    python vision/calibrate.py --select --capture --delay 3
     python vision/calibrate.py --select --image screenshot.png
 
 3. Save a screen capture directly for saved-screen self-tests:
@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -192,6 +193,28 @@ class RegionSelector:
 SAMPLES_DIR = Path(__file__).parent / "samples"
 
 
+def non_negative_delay(value: str) -> float:
+    """Argparse validator for optional read-only screen-capture delay."""
+    try:
+        delay = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("delay must be a number of seconds") from exc
+    if delay < 0:
+        raise argparse.ArgumentTypeError("--delay must be zero or greater")
+    return delay
+
+
+def countdown_before_capture(delay: float, *, sleep_fn=time.sleep, print_fn=print) -> None:
+    """Print whole-second countdown lines, then wait any fractional remainder."""
+    whole_seconds = int(delay)
+    for seconds_left in range(whole_seconds, 0, -1):
+        print_fn(f"Capturing in {seconds_left}...")
+        sleep_fn(1)
+    remainder = delay - whole_seconds
+    if remainder > 0:
+        sleep_fn(remainder)
+
+
 def capture_to_samples(
     samples_dir: Path = SAMPLES_DIR,
     filename: Optional[str] = None,
@@ -270,6 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--select", action="store_true", help="Open click-and-drag region selector")
     parser.add_argument("--capture", action="store_true", help="With --select, capture the current screen into vision/samples first")
     parser.add_argument("--capture-sample", metavar="NAME.png", help="Capture current screen directly into vision/samples/NAME.png, no GUI")
+    parser.add_argument("--delay", type=non_negative_delay, default=0.0, metavar="SECONDS", help="Wait before --capture/--capture-sample (e.g. 3 to alt-tab into FIFA)")
     parser.add_argument("--regions", type=Path, default=Path(__file__).parent / "regions.json")
     parser.add_argument("--validate", action="store_true", help="Warn about regions.json crops that are too tight")
 
@@ -290,6 +314,7 @@ def main() -> None:
     if args.capture_sample:
         if any(sep in args.capture_sample for sep in ("/", "\\")):
             parser.error("--capture-sample accepts a filename only, not a path")
+        countdown_before_capture(args.delay)
         path = capture_to_samples(filename=args.capture_sample)
         print(f"Saved screen capture to {path}")
         return
@@ -310,6 +335,8 @@ def main() -> None:
             parser.error("use either --image or --capture with --select, not both")
         if not args.image and not args.capture:
             parser.error("--select requires --image SCREENSHOT or --capture")
+        if args.capture:
+            countdown_before_capture(args.delay)
         image_path = selector_image_path(args)
         print(f"Opening calibration selector for {image_path}")
         RegionSelector(image_path, args.regions).run()

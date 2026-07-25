@@ -21,7 +21,10 @@ from vision.ocr import (
     parse_formation_text, stamina_fill_percent, read_single_number, read_minute,
 )
 from vision.capture import ScreenRegion, grab_region
-from vision.calibrate import build_parser, capture_to_samples, selector_image_path, validate_regions_file
+from vision.calibrate import (
+    build_parser, capture_to_samples, countdown_before_capture,
+    selector_image_path, validate_regions_file,
+)
 from vision.match_reader import self_test_samples
 
 FIXTURE_PATH = Path(__file__).parent / "_fixture_hud.png"
@@ -174,10 +177,17 @@ def test_capture_arguments_and_selector_path_plumbing():
     from datetime import datetime
 
     parser = build_parser()
-    select_args = parser.parse_args(["--select", "--capture"])
-    sample_args = parser.parse_args(["--capture-sample", "stats.png"])
+    select_args = parser.parse_args(["--select", "--capture", "--delay", "3"])
+    sample_args = parser.parse_args(["--capture-sample", "stats.png", "--delay", "0.5"])
     assert select_args.select and select_args.capture and select_args.image is None
-    assert sample_args.capture_sample == "stats.png"
+    assert select_args.delay == 3.0
+    assert sample_args.capture_sample == "stats.png" and sample_args.delay == 0.5
+    try:
+        parser.parse_args(["--select", "--capture", "--delay", "-1"])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("negative capture delay should be rejected")
 
     samples = Path(tempfile.mkdtemp())
     fake_capture = lambda: Image.new("RGB", (12, 8), "navy")
@@ -190,6 +200,16 @@ def test_capture_arguments_and_selector_path_plumbing():
     assert selector_path.name == "capture_20260726_143013.png"
     assert selector_path.exists()
     print("OK - capture arguments save a shared-capture image and pass it to selector flow")
+
+
+def test_capture_countdown_uses_expected_sleeps():
+    sleeps, messages = [], []
+    countdown_before_capture(3, sleep_fn=sleeps.append, print_fn=messages.append)
+    assert sleeps == [1, 1, 1]
+    assert messages == ["Capturing in 3...", "Capturing in 2...", "Capturing in 1..."]
+    countdown_before_capture(0, sleep_fn=sleeps.append, print_fn=messages.append)
+    assert sleeps == [1, 1, 1]  # zero delay remains immediate/no countdown
+    print("OK - capture countdown prints and sleeps once per whole second")
 
 
 def test_garbled_numeric_ocr_is_unknown_not_zero():
@@ -349,6 +369,7 @@ if __name__ == "__main__":
     test_parse_formation_label_variants()
     test_region_validation_warns_for_too_narrow_stat_crop()
     test_capture_arguments_and_selector_path_plumbing()
+    test_capture_countdown_uses_expected_sleeps()
     test_garbled_numeric_ocr_is_unknown_not_zero()
     test_saved_sample_self_test_summary()
     test_stamina_fill_percent_full_bar()

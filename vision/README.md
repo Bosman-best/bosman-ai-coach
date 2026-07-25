@@ -45,9 +45,11 @@ region coordinates can't be hardcoded - you have to find them.
    ```bash
    python vision/calibrate.py --select --image calibration_grid.png
    # Or capture the current screen read-only and open it immediately:
-   python vision/calibrate.py --select --capture
+   python vision/calibrate.py --select --capture --delay 3
    ```
-   `--capture` reuses the same mss screen-capture code as live vision, saves a
+   `--delay 3` prints a short countdown, giving you time to alt-tab to FIFA
+   before the read-only capture occurs. Omit it (or use `--delay 0`) to capture
+   immediately. `--capture` reuses the same mss screen-capture code as live vision, saves a
    timestamped `vision/samples/capture_YYYYMMDD_HHMMSS.png`, then opens that
    exact file in the selector. It never sends input, changes focus, or
    automates gameplay.
@@ -55,7 +57,7 @@ region coordinates can't be hardcoded - you have to find them.
    To save a named screenshot for a later OCR regression/self-test without
    opening the selector:
    ```bash
-   python vision/calibrate.py --capture-sample fifa_stats_01.png
+   python vision/calibrate.py --capture-sample fifa_stats_01.png --delay 3
    ```
    Select a region name in the left list, then drag its rectangle on the
    screenshot. Each completed drag writes `left`, `top`, `width`, and `height`
