@@ -10,7 +10,10 @@ Two different techniques on purpose:
 """
 
 from __future__ import annotations
+import os
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image
@@ -36,26 +39,107 @@ def _require_pytesseract() -> None:
         )
 
 
-def read_single_number(image: Image.Image) -> Optional[int]:
-    """Read a lone number from a cropped image - use this when you've
-    calibrated separate regions for 'my score' and 'opponent score'
-    rather than one combined 'X - Y' crop."""
+_OCR_SCALE = 4
+# Tell Tesseract the intended working resolution as well as increasing pixels;
+# otherwise it may still estimate a low DPI from a tiny HUD glyph.
+_OCR_DPI_CONFIG = "--dpi 300"
+
+
+def _image_for_ocr(image: Image.Image) -> Image.Image:
+    """Prepare a crop for Tesseract without discarding any glyph pixels.
+
+    HUD crops are often only about 60x45 pixels.  Resize every text/number crop
+    with Lanczos interpolation before OCR so Tesseract does not have to infer
+    character features from a low-resolution image.  There is deliberately no
+    contour crop, whitespace trim, or thresholding here: those operations can
+    discard a thin leading ``1``.
+    """
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    return image.resize((image.width * _OCR_SCALE, image.height * _OCR_SCALE), resampling)
+
+
+# Kept as a focused alias for callers/tests diagnosing single-number OCR.
+def _number_image_for_ocr(image: Image.Image) -> Image.Image:
+    return _image_for_ocr(image)
+
+
+def _write_ocr_debug_image(image: Image.Image) -> None:
+    """Optionally save the *post-preparation* OCR input for diagnosis.
+
+    Set BOSMAN_OCR_DEBUG_PATH to a PNG path while reproducing an OCR issue.
+    This is intentionally opt-in so normal live play does not write screenshots
+    to disk.
+    """
+    debug_path = os.environ.get("BOSMAN_OCR_DEBUG_PATH")
+    if debug_path:
+        Path(debug_path).parent.mkdir(parents=True, exist_ok=True)
+        image.save(debug_path, format="PNG")
+
+
+@dataclass(frozen=True)
+class NumberOCRResult:
+    """A parsed numeric OCR value plus the evidence used to accept it."""
+
+    value: Optional[int]
+    raw_text: str
+    confidence: Optional[float]
+
+
+def read_single_number(image: Image.Image, *, diagnostic: bool = False) -> Optional[int] | NumberOCRResult:
+    """Read a lone number using the shared, target-tested numeric config.
+
+    ``diagnostic=True`` returns raw OCR text and mean word confidence for the
+    match reader to reject weak reads. The default remains backwards-compatible
+    and returns only an int or None.
+    """
     _require_pytesseract()
-    raw = pytesseract.image_to_string(
-        image, config="--psm 7 -c tessedit_char_whitelist=0123456789"
-    )
+    ocr_image = _number_image_for_ocr(image)
+    _write_ocr_debug_image(ocr_image)
+    config = f"--psm 7 {_OCR_DPI_CONFIG} digits"
+    raw = pytesseract.image_to_string(ocr_image, config=config)
     match = re.search(r"\d+", raw)
-    return int(match.group()) if match else None
+    result = NumberOCRResult(
+        value=int(match.group()) if match else None,
+        raw_text=raw,
+        confidence=_numeric_ocr_confidence(ocr_image, config),
+    )
+    return result if diagnostic else result.value
+
+
+def _numeric_ocr_confidence(image: Image.Image, config: str) -> Optional[float]:
+    """Return mean non-negative Tesseract word confidence, if available.
+
+    Confidence is deliberately optional at this low level: callers which need
+    safety can reject an unavailable value, while simple calibration previews
+    can still show raw OCR text on older pytesseract installations.
+    """
+    try:
+        data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
+        confidences = [
+            float(conf)
+            for text, conf in zip(data.get("text", []), data.get("conf", []))
+            if str(text).strip() and float(conf) >= 0
+        ]
+    except Exception:  # noqa: BLE001 - confidence is diagnostic, never a fatal read error
+        return None
+    return sum(confidences) / len(confidences) if confidences else None
+
+
+def _read_text_line(image: Image.Image) -> str:
+    """Shared menu-text OCR path for clocks and formation labels.
+
+    Numeric menu fields must use read_single_number(); this helper is only for
+    genuinely textual values where punctuation/letters are meaningful.
+    """
+    _require_pytesseract()
+    ocr_image = _image_for_ocr(image)
+    _write_ocr_debug_image(ocr_image)
+    return pytesseract.image_to_string(ocr_image, config=f"--psm 7 {_OCR_DPI_CONFIG}")
 
 
 def read_score(image: Image.Image) -> Optional[tuple[int, int]]:
-    """Read a scoreline like '1 - 2' or '2-1' from a cropped image.
-    Returns (my_score, opponent_score) or None if it couldn't be parsed."""
-    _require_pytesseract()
-    raw = pytesseract.image_to_string(
-        image, config="--psm 7 -c tessedit_char_whitelist=0123456789-: "
-    )
-    return parse_score_text(raw)
+    """Read a scoreline like '1 - 2' or '2-1' from a cropped image."""
+    return parse_score_text(_read_text_line(image))
 
 
 def parse_score_text(raw: str) -> Optional[tuple[int, int]]:
@@ -67,27 +151,53 @@ def parse_score_text(raw: str) -> Optional[tuple[int, int]]:
 
 
 def read_minute(image: Image.Image) -> Optional[int]:
-    """Read the match clock (e.g. '70:23' or "70'") and return just the
-    minute as an int. Returns None if it couldn't be parsed."""
-    _require_pytesseract()
-    # Whitelist digits and colon only - an apostrophe in the whitelist
-    # string breaks pytesseract's shlex-based config parsing, and we don't
-    # need it anyway since parse_minute_text only looks at the leading digits.
-    raw = pytesseract.image_to_string(
-        image, config="--psm 7 -c tessedit_char_whitelist=0123456789:"
-    )
-    return parse_minute_text(raw)
+    """Read a clock and return elapsed minutes, including stoppage time."""
+    return parse_match_clock_text(_read_text_line(image))[0]
+
+
+def read_match_half(image: Image.Image) -> Optional[str]:
+    """Read an explicit halftime/fulltime state, or infer the active half."""
+    return parse_match_clock_text(_read_text_line(image))[1]
+
+
+def parse_match_clock_text(raw: str) -> tuple[Optional[int], Optional[str]]:
+    """Parse normal, stoppage-time, and break-state FIFA clock text.
+
+    ``45+2`` becomes minute 47; ``HT`` and ``FT`` retain their meaningful
+    state even though no running clock is present.
+    """
+    normalized = raw.strip().upper()
+    if normalized in {"HT", "HALF TIME", "HALFTIME"}:
+        return 45, "halftime"
+    if normalized in {"FT", "FULL TIME", "FULLTIME"}:
+        return 90, "fulltime"
+    match = re.search(r"(\d{1,3})\s*(?:\+\s*(\d{1,2}))?", normalized)
+    if not match:
+        return None, None
+    minute = int(match.group(1)) + int(match.group(2) or 0)
+    if not 0 <= minute <= 130:
+        return None, None
+    return minute, "first_half" if minute <= 45 else "second_half"
 
 
 def parse_minute_text(raw: str) -> Optional[int]:
-    """Pure parsing logic, split out so it can be tested without OCR."""
-    match = re.match(r"\s*(\d+)", raw)
+    """Backward-compatible minute-only wrapper around clock parsing."""
+    return parse_match_clock_text(raw)[0]
+
+
+def parse_formation_text(raw: str) -> Optional[str]:
+    """Extract one supported formation label from tactics/lineup menu text."""
+    normalized = raw.replace("–", "-").replace("—", "-")
+    match = re.search(r"\b([345](?:\s*-\s*[12345]){2,3})\b", normalized)
     if not match:
         return None
-    minute = int(match.group(1))
-    if 0 <= minute <= 130:  # sanity bound - allow generous extra time
-        return minute
-    return None
+    formation = re.sub(r"\s*[-]\s*", "-", match.group(1))
+    return formation if formation in {"4-4-2", "4-3-3", "3-5-2", "4-2-3-1", "5-3-2", "3-4-2-1"} else None
+
+
+def read_formation_label(image: Image.Image) -> Optional[str]:
+    """Read a formation label from a calibrated tactics/lineup menu crop."""
+    return parse_formation_text(_read_text_line(image))
 
 
 def stamina_fill_percent(image: Image.Image) -> Optional[int]:

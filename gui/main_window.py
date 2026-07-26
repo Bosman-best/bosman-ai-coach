@@ -12,23 +12,25 @@ project root, once you're not calling this file directly from elsewhere).
 
 from __future__ import annotations
 import json
+import os
 import sys
 from pathlib import Path
 
 import yaml
 from pydantic import ValidationError
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QSpinBox, QComboBox, QCheckBox, QLineEdit, QPushButton,
-    QLabel, QTextEdit, QSlider, QMessageBox,
+    QLabel, QTextEdit, QSlider, QMessageBox, QScrollArea, QSizePolicy, QFrame,
+    QAbstractSpinBox, QGraphicsDropShadowEffect,
 )
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.schemas import MatchState, AdviceResponse, Formation, PlayingStyle, PossessionTrend, AppConfig
+from core.schemas import MatchState, AdviceResponse, Formation, PlayingStyle, PossessionTrend, MatchHalf, AppConfig
 from core.ollama_client import OllamaClient, OllamaError
 from core.reasoning_engine import get_advice
 from voice.tts import TTSEngine, advice_to_speech_text
@@ -37,9 +39,39 @@ from voice.stt import VoiceInputEngine
 CONFIG_PATH = ROOT / "config.yaml"
 SCENARIOS_PATH = ROOT / "data" / "simulated_scenarios.json"
 DEFAULT_VOSK_MODEL_PATH = ROOT / "voice" / "model"
-BANNER_PATH = Path(__file__).parent / "assets" / "header_banner.png"
+BACKGROUND_PATH = Path(__file__).parent / "assets" / "coach_bg.jpg"
 
 THREAT_SIDE_OPTIONS = ["(none)", "left_wing", "right_wing", "through_middle"]
+
+
+class CoverBackgroundWidget(QWidget):
+    """Paint ``coach_bg.jpg`` behind child widgets using a cover crop.
+
+    A QPixmap is scaled with KeepAspectRatioByExpanding, then centered and
+    clipped by the widget, so resize/maximize never stretches the photo. The
+    dark overlay is painted here rather than relying on stylesheet alpha, which
+    keeps every form panel independently opaque and legible.
+    """
+
+    def __init__(self, image_path: Path, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._background = QPixmap(str(image_path)) if image_path.exists() else QPixmap()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        target = self.rect()
+        if self._background.isNull():
+            painter.fillRect(target, QColor("#071426"))
+        else:
+            scaled = self._background.scaled(
+                target.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            )
+            x = (target.width() - scaled.width()) // 2
+            y = (target.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+        # Slightly stronger than the first pass so translucent panels remain
+        # legible over floodlights/crowd detail without hiding the photo.
+        painter.fillRect(target, QColor(0, 0, 0, 153))  # approximately rgba(0,0,0,0.60)
 
 
 def load_config() -> AppConfig:
@@ -108,7 +140,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Bosman AI Coach")
-        self.resize(760, 700)
+        self.resize(900, 760)
+        self.setMinimumSize(640, 520)
 
         self.config = load_config()
         self.client = OllamaClient(self.config)
@@ -137,46 +170,156 @@ class MainWindow(QMainWindow):
     # UI construction
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        """Build scrollable panels over a cover-scaled background.
 
-        root_layout.addWidget(self._build_header_banner())
-        root_layout.addWidget(self._build_scenario_bar())
-        root_layout.addWidget(self._build_match_form())
-        root_layout.addWidget(self._build_stats_form())
+        The content uses Qt layouts exclusively: QVBoxLayout for the section
+        stack, QFormLayout for form rows, and QHBoxLayout for paired controls.
+        QScrollArea owns overflow at every window size, so controls are never
+        clipped or manually positioned.
+        """
+        central = CoverBackgroundWidget(BACKGROUND_PATH)
+        self.setCentralWidget(central)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+
+        content = QWidget()
+        content.setObjectName("scrollContent")
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 24, 24, 28)
+        layout.setSpacing(16)
+
+        title = QLabel("BOSMAN AI COACH")
+        title.setObjectName("appTitle")
+        title.setAlignment(Qt.AlignCenter)
+        subtitle = QLabel("Live tactical guidance — read-only match analysis")
+        subtitle.setObjectName("appSubtitle")
+        subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(self._build_scenario_bar())
+        layout.addWidget(self._build_match_form())
+        layout.addWidget(self._build_stats_form())
 
         self.ask_button = QPushButton("ASK COACH")
-        self.ask_button.setMinimumHeight(40)
+        self.ask_button.setObjectName("askButton")
+        self.ask_button.setMinimumHeight(44)
         self.ask_button.clicked.connect(self._on_ask_coach)
-        root_layout.addWidget(self.ask_button)
+        layout.addWidget(self.ask_button)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: gray;")
-        root_layout.addWidget(self.status_label)
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self._build_output_panel())
+        layout.addStretch(1)
 
-        root_layout.addWidget(self._build_output_panel())
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area)
+        self._apply_theme()
+        self._apply_text_and_control_shadows(content)
+        if os.environ.get("BOSMAN_GUI_EFFECT_DEBUG"):
+            self._log_graphics_effects()
 
-    def _build_header_banner(self) -> QWidget:
-        """Illustrated header banner - original artwork generated by
-        gui/assets/generate_banner.py, no real people or club branding
-        (see that file's docstring for why). Falls back to a plain title
-        label if the PNG is ever missing, so a bad/absent asset can't
-        break the app from launching."""
-        label = QLabel()
-        pixmap = QPixmap(str(BANNER_PATH)) if BANNER_PATH.exists() else QPixmap()
-        if not pixmap.isNull():
-            label.setPixmap(pixmap)
-            label.setScaledContents(True)
-            label.setFixedHeight(160)
-        else:
-            label.setText("BOSMAN AI COACH")
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(
-                "background-color: #0d1b36; color: white; font-size: 28px; "
-                "font-weight: bold; padding: 24px;"
-            )
-        return label
+    @staticmethod
+    def _is_spin_box_editor(widget: QWidget) -> bool:
+        """True for the private QLineEdit embedded by any QAbstractSpinBox.
+
+        QSpinBox paints its number through that child line edit. A shadow on
+        the child looks exactly like a doubled numeric value even when the
+        outer QSpinBox itself has no effect.
+        """
+        parent = widget.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QAbstractSpinBox):
+                return True
+            parent = parent.parentWidget()
+        return False
+
+    def _apply_text_and_control_shadows(self, content: QWidget) -> None:
+        """Give text-bearing widgets a consistent, subtle floating shadow.
+
+        Qt stylesheets do not implement CSS ``text-shadow``. Applying a
+        QGraphicsDropShadowEffect to each supported leaf control shadows its
+        rendered text as well as its outline. QAbstractSpinBox editors are
+        explicitly excluded because they render numeric glyphs internally.
+        """
+        shadowed_types = (
+            QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox, QTextEdit,
+        )
+        for widget in [content, *content.findChildren(QWidget)]:
+            if not isinstance(widget, shadowed_types):
+                continue
+            # Every stats/stamina/score field is a QSpinBox today, but this
+            # ancestry check also protects any future QSpinBox subclass.
+            if isinstance(widget, QLineEdit) and self._is_spin_box_editor(widget):
+                continue
+            shadow = QGraphicsDropShadowEffect(widget)
+            shadow.setColor(QColor(0, 0, 0, 205))  # rgba(0, 0, 0, 0.80)
+            shadow.setOffset(1.5, 2.0)
+            shadow.setBlurRadius(4.0)
+            widget.setGraphicsEffect(shadow)
+
+    def _log_graphics_effects(self) -> None:
+        """Print all attached graphics effects when BOSMAN_GUI_EFFECT_DEBUG=1.
+
+        This intentionally reports the runtime widget tree, including Qt's
+        private spin-box line editor, rather than inferring effects from the
+        shadow-application source.
+        """
+        print("[Bosman GUI effects] attached graphics effects:")
+        for widget in [self, *self.findChildren(QWidget)]:
+            effect = widget.graphicsEffect()
+            if effect is None:
+                continue
+            class_name = widget.metaObject().className()
+            object_name = widget.objectName() or "(no objectName)"
+            effect_name = effect.metaObject().className()
+            details = ""
+            if isinstance(effect, QGraphicsDropShadowEffect):
+                offset = effect.offset()
+                color = effect.color()
+                details = (
+                    f" blur={effect.blurRadius():.1f}"
+                    f" offset=({offset.x():.1f},{offset.y():.1f})"
+                    f" color=rgba({color.red()},{color.green()},{color.blue()},{color.alpha()})"
+                )
+            print(f"  {class_name} objectName={object_name}: {effect_name}{details}")
+
+    def _apply_theme(self) -> None:
+        """Use translucent panel grouping while preserving high-contrast controls."""
+        self.setStyleSheet("""
+            QWidget { color: #edf4ff; font-family: Segoe UI, Arial, sans-serif; }
+            QWidget#scrollContent { background: transparent; }
+            QLabel#appTitle { font-size: 28px; font-weight: 800; letter-spacing: 2px; color: #ffffff; padding-top: 4px; }
+            QLabel#appSubtitle { font-size: 13px; font-weight: 500; color: #c8d8eb; padding-bottom: 4px; }
+            QGroupBox { background-color: rgba(2, 14, 35, 46); border: 1px solid rgba(141, 212, 255, 155); border-radius: 8px; margin-top: 14px; padding: 16px 14px 14px 14px; font-size: 16px; font-weight: 750; color: #f4f8ff; }
+            QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 7px; color: #8dd4ff; background-color: transparent; }
+            QLabel { font-size: 13px; font-weight: 600; color: #f4f8ff; }
+            QLineEdit, QComboBox, QSpinBox, QTextEdit { background-color: rgba(242, 246, 251, 232); color: #10213b; border: 1px solid #8db9df; border-radius: 4px; min-height: 26px; padding: 3px 7px; font-size: 13px; font-weight: 500; }
+            QComboBox::drop-down { border: 0; width: 22px; }
+            /* The popup is a separate QAbstractItemView, so style it explicitly
+               rather than relying on the closed combo's foreground color. */
+            QComboBox QAbstractItemView { background-color: #f2f6fb; color: #10213b; border: 1px solid #8db9df; selection-background-color: #32699f; selection-color: #ffffff; outline: 0; padding: 3px; font-size: 13px; font-weight: 500; }
+            QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 8px; color: #10213b; background-color: #f2f6fb; }
+            QComboBox QAbstractItemView::item:hover { background-color: #d9eaff; color: #10213b; }
+            QComboBox QAbstractItemView::item:selected { background-color: #32699f; color: #ffffff; }
+            QSlider::groove:horizontal { height: 7px; border-radius: 3px; background: #476582; }
+            QSlider::handle:horizontal { width: 16px; margin: -5px 0; border-radius: 8px; background: #8dd4ff; }
+            QPushButton { background-color: #244d78; border: 1px solid #6397c5; border-radius: 5px; padding: 7px 12px; font-size: 13px; font-weight: 700; color: #ffffff; }
+            QPushButton:hover { background-color: #32699f; }
+            QPushButton#askButton { background-color: #11a36d; border-color: #6de4b8; font-size: 16px; font-weight: 800; letter-spacing: 1px; }
+            QPushButton#askButton:hover { background-color: #16ba7c; }
+            QTextEdit { min-height: 120px; }
+            QLabel#statusLabel { color: #d0e2f4; font-size: 12px; font-weight: 600; }
+            QCheckBox { font-size: 13px; font-weight: 600; spacing: 7px; }
+        """)
 
     def _build_scenario_bar(self) -> QWidget:
         box = QGroupBox("Load a simulated scenario (optional)")
@@ -193,11 +336,19 @@ class MainWindow(QMainWindow):
     def _build_match_form(self) -> QWidget:
         box = QGroupBox("Match situation")
         form = QFormLayout(box)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
 
         self.minute_spin = QSpinBox()
         self.minute_spin.setRange(0, 120)
         self.minute_spin.setValue(45)
         form.addRow("Minute:", self.minute_spin)
+
+        self.match_half_combo = QComboBox()
+        self.match_half_combo.addItems(["(not tracked)"] + [half.value for half in MatchHalf])
+        form.addRow("Match half/state:", self.match_half_combo)
 
         score_row = QHBoxLayout()
         self.my_score_spin = QSpinBox()
@@ -281,19 +432,23 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_stats_form(self) -> QWidget:
-        box = QGroupBox("Match stats (optional - from the pause/stats screen)")
+        box = QGroupBox("Match stats (optional — pause/stats or tactics menus)")
         form = QFormLayout(box)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
 
-        def _stat_spinbox() -> QSpinBox:
+        def _stat_spinbox(maximum: int = 50) -> QSpinBox:
             s = QSpinBox()
-            s.setRange(0, 50)
+            s.setRange(0, maximum)
             s.setValue(0)
             s.setSpecialValueText("(not tracked)")
             return s
 
-        def _paired_row(label_left: str, label_right: str) -> tuple[QSpinBox, QSpinBox, QWidget]:
-            left_spin = _stat_spinbox()
-            right_spin = _stat_spinbox()
+        def _paired_row(label_left: str, label_right: str, maximum: int = 50) -> tuple[QSpinBox, QSpinBox, QWidget]:
+            left_spin = _stat_spinbox(maximum)
+            right_spin = _stat_spinbox(maximum)
             row = QHBoxLayout()
             row.addWidget(QLabel(label_left))
             row.addWidget(left_spin)
@@ -311,6 +466,16 @@ class MainWindow(QMainWindow):
 
         self.corners_spin, self.opp_corners_spin, corners_widget = _paired_row("Us:", "Opponent:")
         form.addRow("Corners:", corners_widget)
+
+        self.pass_accuracy_spin, self.opp_pass_accuracy_spin, pass_accuracy_widget = _paired_row("Us:", "Opponent:", maximum=100)
+        form.addRow("Pass accuracy %:", pass_accuracy_widget)
+
+        self.fouls_spin, self.opp_fouls_spin, fouls_widget = _paired_row("Us:", "Opponent:")
+        form.addRow("Fouls committed:", fouls_widget)
+
+        self.menu_formation_combo = QComboBox()
+        self.menu_formation_combo.addItems(["(not tracked)"] + [f.value for f in Formation])
+        form.addRow("Tactics-menu formation:", self.menu_formation_combo)
 
         self.my_yellows_spin, self.opp_yellows_spin, yellows_widget = _paired_row("Us:", "Opponent:")
         form.addRow("Yellow cards:", yellows_widget)
@@ -382,6 +547,7 @@ class MainWindow(QMainWindow):
 
     def _populate_form_from_state(self, state: MatchState) -> None:
         self.minute_spin.setValue(state.minute)
+        self.match_half_combo.setCurrentText(state.match_half.value if state.match_half else "(not tracked)")
         self.my_score_spin.setValue(state.my_score)
         self.opp_score_spin.setValue(state.opponent_score)
         self.formation_combo.setCurrentText(state.formation.value)
@@ -406,6 +572,11 @@ class MainWindow(QMainWindow):
         self.opp_shots_on_target_spin.setValue(state.opponent_shots_on_target or 0)
         self.corners_spin.setValue(state.corners or 0)
         self.opp_corners_spin.setValue(state.opponent_corners or 0)
+        self.pass_accuracy_spin.setValue(state.pass_accuracy_pct or 0)
+        self.opp_pass_accuracy_spin.setValue(state.opponent_pass_accuracy_pct or 0)
+        self.fouls_spin.setValue(state.fouls_committed or 0)
+        self.opp_fouls_spin.setValue(state.opponent_fouls_committed or 0)
+        self.menu_formation_combo.setCurrentText(state.menu_formation.value if state.menu_formation else "(not tracked)")
         self.my_yellows_spin.setValue(state.my_yellow_cards or 0)
         self.opp_yellows_spin.setValue(state.opponent_yellow_cards or 0)
         self.red_card_check.setChecked(state.red_card)
@@ -418,6 +589,8 @@ class MainWindow(QMainWindow):
     def _build_match_state(self) -> MatchState:
         threat_side = self.threat_side_combo.currentText()
         trend = self.possession_trend_combo.currentText()
+        match_half = self.match_half_combo.currentText()
+        menu_formation = self.menu_formation_combo.currentText()
 
         def _optional_stat(spin: QSpinBox):
             return spin.value() if spin.value() > 0 else None
@@ -429,6 +602,7 @@ class MainWindow(QMainWindow):
             formation=Formation(self.formation_combo.currentText()),
             playing_style=PlayingStyle(self.style_combo.currentText()),
             possession_pct=self.possession_slider.value(),
+            match_half=None if match_half == "(not tracked)" else MatchHalf(match_half),
             possession_trend=None if trend == "(not tracked)" else PossessionTrend(trend),
             opponent_threat_side=None if threat_side == "(none)" else threat_side,
             team_stamina_avg_pct=(
@@ -449,6 +623,11 @@ class MainWindow(QMainWindow):
             opponent_shots_on_target=_optional_stat(self.opp_shots_on_target_spin),
             corners=_optional_stat(self.corners_spin),
             opponent_corners=_optional_stat(self.opp_corners_spin),
+            pass_accuracy_pct=_optional_stat(self.pass_accuracy_spin),
+            opponent_pass_accuracy_pct=_optional_stat(self.opp_pass_accuracy_spin),
+            fouls_committed=_optional_stat(self.fouls_spin),
+            opponent_fouls_committed=_optional_stat(self.opp_fouls_spin),
+            menu_formation=None if menu_formation == "(not tracked)" else Formation(menu_formation),
             my_yellow_cards=_optional_stat(self.my_yellows_spin),
             opponent_yellow_cards=_optional_stat(self.opp_yellows_spin),
             red_card=self.red_card_check.isChecked(),
@@ -597,20 +776,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _format_advice_html(advice: AdviceResponse) -> str:
-        parts = [f"<h3>{advice.summary}</h3>"]
+        parts = [f"<h3>Top suggestion: {advice.top_suggestion}</h3>"]
         if advice.formation_change:
             parts.append(f"<b>Formation change:</b> {advice.formation_change.value}<br>")
         if advice.style_change:
             parts.append(f"<b>Playing style:</b> {advice.style_change.value}<br>")
-        if advice.substitution_suggestions:
-            parts.append("<b>Substitutions:</b><ul>")
-            parts += [f"<li>{s}</li>" for s in advice.substitution_suggestions]
+        if advice.secondary_considerations:
+            parts.append("<b>Also consider:</b><ul>")
+            parts += [f"<li>{item}</li>" for item in advice.secondary_considerations]
             parts.append("</ul>")
-        if advice.tactical_instructions:
-            parts.append("<b>Tactical instructions:</b><ul>")
-            parts += [f"<li>{t}</li>" for t in advice.tactical_instructions]
-            parts.append("</ul>")
-        parts.append(f"<br><i>Why: {advice.reasoning}</i>")
         return "".join(parts)
 
 

@@ -12,6 +12,11 @@
     "opponent_shots_on_target": null,
     "corners": null,
     "opponent_corners": null,
+    "pass_accuracy_pct": null,
+    "opponent_pass_accuracy_pct": null,
+    "fouls_committed": null,
+    "opponent_fouls_committed": null,
+    "formation_label": null,
     "my_yellow_cards": null,
     "opponent_yellow_cards": null
   },

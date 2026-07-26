@@ -31,17 +31,15 @@ def advice_to_speech_text(advice: AdviceResponse) -> str:
     plus at most one instruction, not the full written breakdown (the
     GUI text panel still shows everything).
     """
-    parts = [advice.summary.strip().rstrip(".") + "."]
+    parts = [advice.top_suggestion.strip().rstrip(".") + "."]
 
     if advice.formation_change:
         parts.append(f"Switch to {advice.formation_change.value}.")
     if advice.style_change:
         parts.append(f"Play {_speakable_style(advice.style_change.value)}.")
 
-    if advice.substitution_suggestions:
-        parts.append(advice.substitution_suggestions[0].rstrip(".") + ".")
-    elif advice.tactical_instructions:
-        parts.append(advice.tactical_instructions[0].rstrip(".") + ".")
+    if advice.secondary_considerations:
+        parts.append(advice.secondary_considerations[0].rstrip(".") + ".")
 
     return " ".join(parts)
 

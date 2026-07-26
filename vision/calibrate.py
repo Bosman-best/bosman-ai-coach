@@ -11,7 +11,16 @@ on your own screen. This script has two modes:
 
     python vision/calibrate.py --grab
 
-2. Test a candidate region against a saved screenshot, to check the crop
+2. Select regions from an existing image or a fresh read-only screen capture:
+
+    python vision/calibrate.py --select --capture --delay 3
+    python vision/calibrate.py --select --image screenshot.png
+
+3. Save a screen capture directly for saved-screen self-tests:
+
+    python vision/calibrate.py --capture-sample fifa_stats_01.png
+
+4. Test a candidate region against a saved screenshot, to check the crop
    is right and OCR can actually read it, BEFORE writing it into
    regions.json and relying on it during a real match.
 
@@ -21,12 +30,219 @@ on your own screen. This script has two modes:
 
 from __future__ import annotations
 import argparse
+import json
+import sys
+import time
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image, ImageDraw
 
+# Support the documented `python vision/calibrate.py ...` invocation as well
+# as `python -m vision.calibrate ...`.
+ROOT = Path(__file__).parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from vision.capture import ScreenRegion, grab_region, grab_full_screen
 from vision.ocr import read_single_number, read_minute, stamina_fill_percent
+
+
+# Conservative minimum crop sizes in source pixels. They deliberately include
+# a margin around the widest expected value so a calibration cannot recreate a
+# clipped leading/trailing digit bug. They are warnings, not resolution-agnostic
+# guarantees: users must still check real FIFA screenshots.
+REGION_MINIMUMS: dict[str, tuple[int, int]] = {
+    "my_score": (50, 30), "opponent_score": (50, 30), "clock": (80, 30),
+    "shots": (80, 40), "opponent_shots": (80, 40),
+    "shots_on_target": (80, 40), "opponent_shots_on_target": (80, 40),
+    "corners": (80, 40), "opponent_corners": (80, 40),
+    "pass_accuracy_pct": (80, 40), "opponent_pass_accuracy_pct": (80, 40),
+    "fouls_committed": (80, 40), "opponent_fouls_committed": (80, 40),
+    "my_yellow_cards": (60, 40), "opponent_yellow_cards": (60, 40),
+    "formation_label": (150, 40),
+    "striker_stamina_bar": (80, 10), "key_player_stamina_bar": (80, 10),
+}
+
+
+def validate_regions_file(regions_path: Path) -> list[str]:
+    """Return loud calibration warnings without needing a screenshot/OCR."""
+    raw = json.loads(regions_path.read_text())
+    warnings: list[str] = []
+    for name, coords in raw.get("regions", {}).items():
+        if coords is None:
+            continue
+        minimum = REGION_MINIMUMS.get(name)
+        if minimum is None:
+            continue
+        width, height = coords.get("width", 0), coords.get("height", 0)
+        if width < minimum[0] or height < minimum[1]:
+            warnings.append(
+                f"WARNING {name}: {width}x{height} is tighter than the recommended "
+                f"minimum {minimum[0]}x{minimum[1]}; OCR may clip characters."
+            )
+    for index, coords in enumerate(raw.get("team_stamina_bars", [])):
+        width, height = coords.get("width", 0), coords.get("height", 0)
+        if width < 80 or height < 10:
+            warnings.append(
+                f"WARNING team_stamina_bars[{index}]: {width}x{height} is tighter than minimum 80x10."
+            )
+    return warnings
+
+
+def _save_region(regions_path: Path, region_name: str, coords: dict[str, int]) -> None:
+    raw = json.loads(regions_path.read_text())
+    if region_name.startswith("team_stamina_"):
+        index = int(region_name.rsplit("_", 1)[1])
+        bars = raw.setdefault("team_stamina_bars", [])
+        while len(bars) <= index:
+            bars.append(None)
+        bars[index] = coords
+    else:
+        raw.setdefault("regions", {})[region_name] = coords
+    regions_path.write_text(json.dumps(raw, indent=2) + "\n")
+
+
+class RegionSelector:
+    """Small standalone Tk calibration UI: select a field, then drag its crop."""
+
+    def __init__(self, image_path: Path, regions_path: Path):
+        import tkinter as tk
+        from tkinter import ttk
+        from PIL import ImageTk
+
+        self.tk = tk
+        self.regions_path = regions_path
+        self.start: Optional[tuple[int, int]] = None
+        self.rectangle: Optional[int] = None
+        raw = json.loads(regions_path.read_text())
+        self.names = list(raw.get("regions", {}).keys())
+        self.names.extend(f"team_stamina_{i}" for i, _bar in enumerate(raw.get("team_stamina_bars", [])))
+
+        # ImageTk.PhotoImage requires a live Tk interpreter. Create the root
+        # before constructing any PhotoImage (Windows raises "Too early to
+        # create image" otherwise), then build widgets and attach the image.
+        self.root = tk.Tk()
+        self.root.title("Bosman region calibration — select a field, then drag")
+        self.image = Image.open(image_path).convert("RGB")
+        frame = ttk.Frame(self.root, padding=8)
+        frame.grid(sticky="nsew")
+        self.root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+
+        self.listbox = tk.Listbox(frame, exportselection=False, width=28)
+        for name in self.names:
+            self.listbox.insert(tk.END, name)
+        self.listbox.selection_set(0)
+        self.listbox.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        self.canvas = tk.Canvas(frame, width=min(self.image.width, 1100), height=min(self.image.height, 750), scrollregion=(0, 0, self.image.width, self.image.height))
+        self.canvas.grid(row=0, column=1, sticky="nsew")
+        self.photo = ImageTk.PhotoImage(self.image, master=self.root)
+        self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
+        vertical = ttk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
+        horizontal = ttk.Scrollbar(frame, orient="horizontal", command=self.canvas.xview)
+        vertical.grid(row=0, column=2, sticky="ns")
+        horizontal.grid(row=1, column=1, sticky="ew")
+        self.canvas.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
+        self.canvas.bind("<ButtonPress-1>", self._press)
+        self.canvas.bind("<B1-Motion>", self._drag)
+        self.canvas.bind("<ButtonRelease-1>", self._release)
+        ttk.Button(frame, text="Add team stamina bar", command=self._add_bar).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(frame, text="Drag a rectangle. Each completed drag saves regions.json immediately.").grid(row=2, column=1, sticky="w", pady=(8, 0))
+
+    def _point(self, event) -> tuple[int, int]:
+        return int(self.canvas.canvasx(event.x)), int(self.canvas.canvasy(event.y))
+
+    def _press(self, event) -> None:
+        self.start = self._point(event)
+        if self.rectangle is not None:
+            self.canvas.delete(self.rectangle)
+        x, y = self.start
+        self.rectangle = self.canvas.create_rectangle(x, y, x, y, outline="#00e5ff", width=2)
+
+    def _drag(self, event) -> None:
+        if self.start is not None and self.rectangle is not None:
+            self.canvas.coords(self.rectangle, *self.start, *self._point(event))
+
+    def _release(self, event) -> None:
+        if self.start is None:
+            return
+        end_x, end_y = self._point(event)
+        left, right = sorted((self.start[0], end_x))
+        top, bottom = sorted((self.start[1], end_y))
+        if right > left and bottom > top:
+            name = self.names[self.listbox.curselection()[0]]
+            _save_region(self.regions_path, name, {"left": left, "top": top, "width": right - left, "height": bottom - top})
+            print(f"Saved {name}: left={left}, top={top}, width={right-left}, height={bottom-top}")
+        self.start = None
+
+    def _add_bar(self) -> None:
+        name = f"team_stamina_{sum(item.startswith('team_stamina_') for item in self.names)}"
+        self.names.append(name)
+        self.listbox.insert(self.tk.END, name)
+        self.listbox.selection_clear(0, self.tk.END)
+        self.listbox.selection_set(self.listbox.size() - 1)
+
+    def run(self) -> None:
+        self.root.mainloop()
+
+
+SAMPLES_DIR = Path(__file__).parent / "samples"
+
+
+def non_negative_delay(value: str) -> float:
+    """Argparse validator for optional read-only screen-capture delay."""
+    try:
+        delay = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("delay must be a number of seconds") from exc
+    if delay < 0:
+        raise argparse.ArgumentTypeError("--delay must be zero or greater")
+    return delay
+
+
+def countdown_before_capture(delay: float, *, sleep_fn=time.sleep, print_fn=print) -> None:
+    """Print whole-second countdown lines, then wait any fractional remainder."""
+    whole_seconds = int(delay)
+    for seconds_left in range(whole_seconds, 0, -1):
+        print_fn(f"Capturing in {seconds_left}...")
+        sleep_fn(1)
+    remainder = delay - whole_seconds
+    if remainder > 0:
+        sleep_fn(remainder)
+
+
+def capture_to_samples(
+    samples_dir: Path = SAMPLES_DIR,
+    filename: Optional[str] = None,
+    *,
+    capture_fn=grab_full_screen,
+    now_fn=datetime.now,
+) -> Path:
+    """Use the shared mss capture path and save a read-only screen image.
+
+    This contains no input, focus, or gameplay automation. ``capture_fn`` is
+    injectable solely to test path plumbing without a real display.
+    """
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    if filename is None:
+        filename = f"capture_{now_fn():%Y%m%d_%H%M%S}.png"
+    destination = samples_dir / Path(filename).name
+    image = capture_fn()
+    image.save(destination)
+    return destination
+
+
+def selector_image_path(
+    args, *, capture_fn=grab_full_screen, now_fn=datetime.now, samples_dir: Path = SAMPLES_DIR
+) -> Path:
+    """Resolve --select's existing-image or freshly-captured source."""
+    if args.capture:
+        return capture_to_samples(samples_dir, capture_fn=capture_fn, now_fn=now_fn)
+    return args.image
 
 
 def grab_calibration_screenshot(out_path: Path, grid_spacing: int = 100) -> Path:
@@ -70,20 +286,61 @@ def test_region(image_path: Path, left: int, top: int, width: int, height: int, 
         print(f"Unknown kind '{kind}' - use score, clock, or stamina.")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Bosman AI Coach - region calibration helper")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Bosman AI Coach - read-only region calibration helper")
     parser.add_argument("--grab", action="store_true", help="Capture a gridded full-screen screenshot")
     parser.add_argument("--out", type=Path, default=Path("calibration_grid.png"))
+    parser.add_argument("--select", action="store_true", help="Open click-and-drag region selector")
+    parser.add_argument("--capture", action="store_true", help="With --select, capture the current screen into vision/samples first")
+    parser.add_argument("--capture-sample", metavar="NAME.png", help="Capture current screen directly into vision/samples/NAME.png, no GUI")
+    parser.add_argument("--delay", type=non_negative_delay, default=0.0, metavar="SECONDS", help="Wait before --capture/--capture-sample (e.g. 3 to alt-tab into FIFA)")
+    parser.add_argument("--regions", type=Path, default=Path(__file__).parent / "regions.json")
+    parser.add_argument("--validate", action="store_true", help="Warn about regions.json crops that are too tight")
 
     parser.add_argument("--test-region", action="store_true", help="Test a candidate region")
-    parser.add_argument("--image", type=Path, help="Saved screenshot to test against")
+    parser.add_argument("--image", type=Path, help="Saved screenshot to test against (or use --select --capture)")
     parser.add_argument("--left", type=int)
     parser.add_argument("--top", type=int)
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--kind", choices=["score", "clock", "stamina"], help="What to read from the region")
+    return parser
 
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
+
+    if args.capture_sample:
+        if any(sep in args.capture_sample for sep in ("/", "\\")):
+            parser.error("--capture-sample accepts a filename only, not a path")
+        countdown_before_capture(args.delay)
+        path = capture_to_samples(filename=args.capture_sample)
+        print(f"Saved screen capture to {path}")
+        return
+
+    if args.capture and not args.select:
+        parser.error("--capture is only valid together with --select")
+
+    if args.validate:
+        warnings = validate_regions_file(args.regions)
+        if warnings:
+            print("\n".join(warnings))
+            raise SystemExit(1)
+        print(f"PASS {args.regions}: all configured regions meet recommended minimum dimensions")
+        return
+
+    if args.select:
+        if args.image and args.capture:
+            parser.error("use either --image or --capture with --select, not both")
+        if not args.image and not args.capture:
+            parser.error("--select requires --image SCREENSHOT or --capture")
+        if args.capture:
+            countdown_before_capture(args.delay)
+        image_path = selector_image_path(args)
+        print(f"Opening calibration selector for {image_path}")
+        RegionSelector(image_path, args.regions).run()
+        return
 
     if args.grab:
         path = grab_calibration_screenshot(args.out)

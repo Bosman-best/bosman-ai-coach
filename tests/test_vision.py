@@ -15,8 +15,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PIL import Image, ImageDraw
 
-from vision.ocr import parse_score_text, parse_minute_text, stamina_fill_percent, read_single_number, read_minute
+import vision.ocr as ocr_module
+from vision.ocr import (
+    parse_score_text, parse_minute_text, parse_match_clock_text,
+    parse_formation_text, stamina_fill_percent, read_single_number, read_minute,
+)
 from vision.capture import ScreenRegion, grab_region
+from vision.calibrate import (
+    build_parser, capture_to_samples, countdown_before_capture,
+    selector_image_path, validate_regions_file,
+)
+from vision.match_reader import self_test_samples
 
 FIXTURE_PATH = Path(__file__).parent / "_fixture_hud.png"
 
@@ -55,6 +64,65 @@ def test_score_ocr_reads_real_image():
     print("OK - OCR reads a real synthetic scoreboard image correctly (2-1)")
 
 
+def test_single_digit_ocr_reads_real_image():
+    """Real-Tesseract regression for PSM 7 + digits on a lone HUD digit."""
+    from PIL import ImageFont
+
+    image = Image.new("RGB", (60, 45), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((15, 7), "5", fill=(255, 255, 255), font=font)
+
+    assert read_single_number(image) == 5
+    print("OK - OCR reads a lone digit with PSM 7 + digits")
+
+
+def test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract():
+    """Exercise the non-Tesseract safeguards with a deterministic fake engine."""
+    class FakeTesseract:
+        def __init__(self):
+            self.image = None
+            self.config = None
+
+        def image_to_string(self, image, config):
+            self.image, self.config = image, config
+            return "an17!"  # unconstrained LSTM-like noise around valid digits
+
+    fake = FakeTesseract()
+    original = ocr_module.pytesseract
+    ocr_module.pytesseract = fake
+    try:
+        result = read_single_number(Image.new("RGB", (60, 45), (0, 0, 0)))
+    finally:
+        ocr_module.pytesseract = original
+
+    assert result == 17
+    assert fake.image.size == (240, 180)
+    assert "--psm 7" in fake.config
+    assert "digits" in fake.config
+    assert "tessedit_char_whitelist" not in fake.config
+    print("OK - number OCR upscales 4x and uses PSM 7 with Tesseract's digits config")
+
+
+def test_single_number_ocr_preserves_leading_one():
+    """Regression: Tesseract 5.5 PSM 7 dropped the leading thin ``1`` in 14."""
+    from PIL import ImageFont
+
+    image = Image.new("RGB", (60, 45), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((15, 7), "17", fill=(255, 255, 255), font=font)
+
+    assert read_single_number(image) == 17
+    print("OK - OCR preserves a thin leading 1 in 17")
+
+
 def test_clock_ocr_reads_real_image():
     fixture = _make_hud_fixture()
     clock_img = grab_region(ScreenRegion("clock", 460, 30, 80, 50), source_image=fixture)
@@ -75,9 +143,112 @@ def test_parse_minute_text_variants():
     assert parse_minute_text("70:23") == 70
     assert parse_minute_text("70°") == 70  # apostrophe sometimes misread as degree sign
     assert parse_minute_text("  45  ") == 45
+    assert parse_minute_text("45+2") == 47
     assert parse_minute_text("999") is None  # out of sane bounds, rejected
     assert parse_minute_text("nothing here") is None
-    print("OK - minute text parsing handles OCR quirks and rejects nonsense")
+    assert parse_match_clock_text("HT") == (45, "halftime")
+    assert parse_match_clock_text("FT") == (90, "fulltime")
+    print("OK - clock parsing handles stoppage time, break states, and OCR quirks")
+
+
+def test_parse_formation_label_variants():
+    assert parse_formation_text("FORMATION 4 - 3 - 3") == "4-3-3"
+    assert parse_formation_text("4-2-3-1") == "4-2-3-1"
+    assert parse_formation_text("not a formation") is None
+    print("OK - formation-label parsing accepts supported tactics-menu text")
+
+
+def test_region_validation_warns_for_too_narrow_stat_crop(tmp_path=None):
+    """Configuration-only guard: no screen or OCR engine is required."""
+    import json
+    import tempfile
+
+    temp_dir = Path(tempfile.mkdtemp()) if tmp_path is None else tmp_path
+    regions = temp_dir / "regions.json"
+    regions.write_text(json.dumps({"regions": {"shots": {"left": 1, "top": 2, "width": 25, "height": 20}}, "team_stamina_bars": []}))
+    warnings = validate_regions_file(regions)
+    assert any("shots" in warning and "80x40" in warning for warning in warnings)
+    print("OK - narrow stats crop triggers a calibration width warning")
+
+
+def test_capture_arguments_and_selector_path_plumbing():
+    """Argument parsing and capture-to-selector flow require no real display."""
+    import tempfile
+    from datetime import datetime
+
+    parser = build_parser()
+    select_args = parser.parse_args(["--select", "--capture", "--delay", "3"])
+    sample_args = parser.parse_args(["--capture-sample", "stats.png", "--delay", "0.5"])
+    assert select_args.select and select_args.capture and select_args.image is None
+    assert select_args.delay == 3.0
+    assert sample_args.capture_sample == "stats.png" and sample_args.delay == 0.5
+    try:
+        parser.parse_args(["--select", "--capture", "--delay", "-1"])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("negative capture delay should be rejected")
+
+    samples = Path(tempfile.mkdtemp())
+    fake_capture = lambda: Image.new("RGB", (12, 8), "navy")
+    captured = capture_to_samples(
+        samples, capture_fn=fake_capture, now_fn=lambda: datetime(2026, 7, 26, 14, 30, 12)
+    )
+    assert captured == samples / "capture_20260726_143012.png"
+    assert captured.exists()
+    selector_path = selector_image_path(select_args, samples_dir=samples, capture_fn=fake_capture, now_fn=lambda: datetime(2026, 7, 26, 14, 30, 13))
+    assert selector_path.name == "capture_20260726_143013.png"
+    assert selector_path.exists()
+    print("OK - capture arguments save a shared-capture image and pass it to selector flow")
+
+
+def test_capture_countdown_uses_expected_sleeps():
+    sleeps, messages = [], []
+    countdown_before_capture(3, sleep_fn=sleeps.append, print_fn=messages.append)
+    assert sleeps == [1, 1, 1]
+    assert messages == ["Capturing in 3...", "Capturing in 2...", "Capturing in 1..."]
+    countdown_before_capture(0, sleep_fn=sleeps.append, print_fn=messages.append)
+    assert sleeps == [1, 1, 1]  # zero delay remains immediate/no countdown
+    print("OK - capture countdown prints and sleeps once per whole second")
+
+
+def test_garbled_numeric_ocr_is_unknown_not_zero():
+    """Mock realistic weak OCR text ('l7?\\n'), not an OCR engine result."""
+    import json
+    import tempfile
+    import vision.capture as capture_module
+    import vision.match_reader as reader_module
+    from vision.ocr import NumberOCRResult
+
+    temp_dir = Path(tempfile.mkdtemp())
+    screenshot = temp_dir / "sample.png"
+    Image.new("RGB", (100, 80), "black").save(screenshot)
+    regions = temp_dir / "regions.json"
+    regions.write_text(json.dumps({"regions": {"shots": {"left": 0, "top": 0, "width": 80, "height": 40}}, "team_stamina_bars": []}))
+    original_regions, original_reader = capture_module.REGIONS_PATH, reader_module.read_single_number
+    capture_module.REGIONS_PATH = regions
+    reader_module.read_single_number = lambda _image, diagnostic=False: NumberOCRResult(None, "l7?\\n", 18.0)
+    try:
+        result = reader_module.read_partial_match_state(source_image=screenshot)
+    finally:
+        capture_module.REGIONS_PATH, reader_module.read_single_number = original_regions, original_reader
+
+    assert "shots" not in result
+    assert "l7?" in result["_read_errors"]["shots"]
+    print("OK - garbled numeric OCR leaves shots unknown and logs raw text")
+
+
+def test_saved_sample_self_test_summary():
+    """Self-test runner is exercised with a saved image and injected reader."""
+    import json
+    import tempfile
+
+    samples = Path(tempfile.mkdtemp())
+    Image.new("RGB", (20, 20), "black").save(samples / "sample.png")
+    (samples / "expectations.json").write_text(json.dumps({"sample.png": {"shots": 14}}))
+    passed, failed = self_test_samples(samples, reader=lambda _path: {"shots": 14})
+    assert (passed, failed) == (1, 0)
+    print("OK - saved-sample self-test prints a passing field summary")
 
 
 def _make_stamina_bar_image(fill_fraction: float, width: int = 200, height: int = 20) -> Image.Image:
@@ -127,8 +298,13 @@ def test_match_reader_reads_stats_and_team_stamina_average():
     except Exception:
         font = ImageFont.load_default()
 
-    draw.rectangle([45, 25, 105, 70], fill=(0, 0, 0))
-    draw.text((60, 32), "14", fill=(255, 255, 255), font=font)
+    # All number crops are 80px wide: enough for a three-digit percent plus
+    # margin and comfortably wider than expected one/two-digit fouls.
+    for left, value in [(45, "14"), (150, "88"), (250, "76"), (350, "3"), (430, "1")]:
+        draw.rectangle([left, 25, left + 80, 70], fill=(0, 0, 0))
+        draw.text((left + 15, 32), value, fill=(255, 255, 255), font=font)
+    draw.rectangle([540, 25, 690, 70], fill=(0, 0, 0))
+    draw.text((555, 32), "4-3-3", fill=(255, 255, 255), font=font)
 
     for i, frac in enumerate([0.8, 0.5, 0.3]):
         bar_left, bar_top, bar_w, bar_h = 50, 400 + i * 40, 150, 15
@@ -144,11 +320,16 @@ def test_match_reader_reads_stats_and_team_stamina_average():
         "regions": {
             "my_score": None, "opponent_score": None, "clock": None,
             "striker_stamina_bar": None, "key_player_stamina_bar": None,
-            "shots": {"left": 45, "top": 25, "width": 60, "height": 45},
+            "shots": {"left": 45, "top": 25, "width": 80, "height": 45},
             "opponent_shots": None, "shots_on_target": None,
             "opponent_shots_on_target": None, "corners": None,
-            "opponent_corners": None, "my_yellow_cards": None,
-            "opponent_yellow_cards": None,
+            "opponent_corners": None,
+            "pass_accuracy_pct": {"left": 150, "top": 25, "width": 80, "height": 45},
+            "opponent_pass_accuracy_pct": {"left": 250, "top": 25, "width": 80, "height": 45},
+            "fouls_committed": {"left": 350, "top": 25, "width": 80, "height": 45},
+            "opponent_fouls_committed": {"left": 430, "top": 25, "width": 80, "height": 45},
+            "formation_label": {"left": 540, "top": 25, "width": 150, "height": 45},
+            "my_yellow_cards": None, "opponent_yellow_cards": None,
         },
         "team_stamina_bars": [
             {"left": 50, "top": 400, "width": 150, "height": 15},
@@ -167,16 +348,30 @@ def test_match_reader_reads_stats_and_team_stamina_average():
         test_regions_path.unlink(missing_ok=True)
 
     assert result["shots"] == 14, result
+    assert result["pass_accuracy_pct"] == 88, result
+    assert result["opponent_pass_accuracy_pct"] == 76, result
+    assert result["fouls_committed"] == 3, result
+    assert result["opponent_fouls_committed"] == 1, result
+    assert result["menu_formation"] == "4-3-3", result
     assert 48 <= result["team_stamina_avg_pct"] <= 58, result  # ~53% expected
-    print("OK - match_reader reads stats and averages team stamina across multiple bars")
+    print("OK - match_reader reads stats, menu formation, and team stamina")
 
 
 if __name__ == "__main__":
     test_score_ocr_reads_real_image()
+    test_single_digit_ocr_reads_real_image()
+    test_single_number_ocr_upscales_and_uses_digits_config_without_tesseract()
+    test_single_number_ocr_preserves_leading_one()
     test_clock_ocr_reads_real_image()
     test_match_reader_reads_stats_and_team_stamina_average()
     test_parse_score_text_variants()
     test_parse_minute_text_variants()
+    test_parse_formation_label_variants()
+    test_region_validation_warns_for_too_narrow_stat_crop()
+    test_capture_arguments_and_selector_path_plumbing()
+    test_capture_countdown_uses_expected_sleeps()
+    test_garbled_numeric_ocr_is_unknown_not_zero()
+    test_saved_sample_self_test_summary()
     test_stamina_fill_percent_full_bar()
     test_stamina_fill_percent_half_bar()
     test_stamina_fill_percent_empty_bar()

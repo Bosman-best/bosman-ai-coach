@@ -56,11 +56,14 @@ class VoiceInputEngine:
         try:
             import vosk
             import sounddevice as sd
-        except ImportError:
+        except (ImportError, OSError):
+            # sounddevice can be installed while its native PortAudio shared
+            # library is absent; that should degrade exactly like a missing
+            # optional dependency rather than prevent the GUI from starting.
             return STTStatus(
                 available=False,
                 reason=(
-                    "vosk and/or sounddevice isn't installed. Run "
+                    "vosk/sounddevice or its audio backend isn't available. Run "
                     "`pip install vosk sounddevice`. On Linux, sounddevice "
                     "also needs the PortAudio system library "
                     "(`sudo apt install portaudio19-dev`)."

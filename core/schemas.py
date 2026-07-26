@@ -37,6 +37,13 @@ class PossessionTrend(str, Enum):
     STABLE = "stable"
 
 
+class MatchHalf(str, Enum):
+    FIRST = "first_half"
+    SECOND = "second_half"
+    HALFTIME = "halftime"
+    FULLTIME = "fulltime"
+
+
 class MatchState(BaseModel):
     """A snapshot of the match at one point in time. This is the ONLY
     thing the reasoning engine ever sees — it doesn't care where it came
@@ -53,6 +60,8 @@ class MatchState(BaseModel):
     formation: Formation
     playing_style: PlayingStyle = PlayingStyle.BALANCED
     possession_pct: int = Field(ge=0, le=100)
+    # Read from the match clock when its text explicitly indicates a break.
+    match_half: Optional[MatchHalf] = None
     possession_trend: Optional[PossessionTrend] = Field(
         default=None, description="How possession has shifted over the last few minutes"
     )
@@ -76,6 +85,13 @@ class MatchState(BaseModel):
     opponent_shots_on_target: Optional[int] = Field(default=None, ge=0)
     corners: Optional[int] = Field(default=None, ge=0)
     opponent_corners: Optional[int] = Field(default=None, ge=0)
+    pass_accuracy_pct: Optional[int] = Field(default=None, ge=0, le=100)
+    opponent_pass_accuracy_pct: Optional[int] = Field(default=None, ge=0, le=100)
+    fouls_committed: Optional[int] = Field(default=None, ge=0)
+    opponent_fouls_committed: Optional[int] = Field(default=None, ge=0)
+    # A lineup-menu read is separate from the player-selected current formation;
+    # callers can surface a mismatch rather than silently overriding it.
+    menu_formation: Optional[Formation] = None
     my_yellow_cards: Optional[int] = Field(default=None, ge=0)
     opponent_yellow_cards: Optional[int] = Field(default=None, ge=0)
 
@@ -90,16 +106,15 @@ class MatchState(BaseModel):
 
 
 class AdviceResponse(BaseModel):
-    """Structured advice returned by the reasoning engine. Requesting
-    JSON output in this exact shape (rather than parsing free text) is
-    what makes the GUI layer trivial and deterministic."""
+    """A deliberately compact, ordered live-play recommendation."""
 
-    summary: str = Field(description="One sentence, the headline recommendation")
+    top_suggestion: str = Field(description="The one highest-priority action")
+    secondary_considerations: list[str] = Field(
+        default_factory=list, max_length=2,
+        description="Zero to two brief supporting actions, in priority order",
+    )
     formation_change: Optional[Formation] = None
     style_change: Optional[PlayingStyle] = None
-    substitution_suggestions: list[str] = Field(default_factory=list)
-    tactical_instructions: list[str] = Field(default_factory=list)
-    reasoning: str = Field(description="Short explanation of WHY, 2-3 sentences max")
 
 
 class AppConfig(BaseModel):
